@@ -727,34 +727,48 @@ final class CompanionManager: ObservableObject {
                     let appKitY = displayHeight - displayLocalY
 
                     // Convert display-local coords to global screen coords
-                    let globalLocation = CGPoint(
+                    var finalGlobalLocation = CGPoint(
                         x: displayLocalX + displayFrame.origin.x,
                         y: appKitY + displayFrame.origin.y
                     )
 
                     // Calculate highlight bounding box size in display points
-                    let highlightWidth: CGFloat
-                    let highlightHeight: CGFloat
+                    var finalHighlightWidth: CGFloat
+                    var finalHighlightHeight: CGFloat
                     if let parsedSize = parseResult.size, parsedSize.width > 0 && parsedSize.height > 0 {
                         let isSizeNorm = parsedSize.width <= 1000.0 && parsedSize.height <= 1000.0
                         let normW = isSizeNorm ? (parsedSize.width / 1000.0) : (parsedSize.width / CGFloat(targetScreenCapture.screenshotWidthInPixels))
                         let normH = isSizeNorm ? (parsedSize.height / 1000.0) : (parsedSize.height / CGFloat(targetScreenCapture.screenshotHeightInPixels))
-                        highlightWidth = max(50.0, min(normW * displayWidth, 600.0))
-                        highlightHeight = max(24.0, min(normH * displayHeight, 300.0))
+                        finalHighlightWidth = max(50.0, min(normW * displayWidth, 600.0))
+                        finalHighlightHeight = max(24.0, min(normH * displayHeight, 300.0))
                     } else {
                         // Default element highlight box size
-                        highlightWidth = 140.0
-                        highlightHeight = 38.0
+                        finalHighlightWidth = 140.0
+                        finalHighlightHeight = 38.0
                     }
 
-                    detectedElementHighlightSize = CGSize(width: highlightWidth, height: highlightHeight)
+                    // High-precision OCR text snapping via Apple Vision framework:
+                    // If the user's query refers to a text button, menu item, or playlist,
+                    // snap the coordinate and bounding box to the exact text element!
+                    let candidateKeywords = Self.buildCandidateKeywords(label: parseResult.elementLabel, transcript: transcript)
+                    if let snappedMatch = CompanionScreenCaptureUtility.snapToMatchingTextElement(
+                        candidateKeywords: candidateKeywords,
+                        near: finalGlobalLocation,
+                        targetScreenCapture: targetScreenCapture
+                    ) {
+                        finalGlobalLocation = snappedMatch.globalCenter
+                        finalHighlightWidth = snappedMatch.globalRect.width
+                        finalHighlightHeight = snappedMatch.globalRect.height
+                    }
+
+                    detectedElementHighlightSize = CGSize(width: finalHighlightWidth, height: finalHighlightHeight)
                     detectedElementBubbleText = parseResult.elementLabel
-                    detectedElementScreenLocation = globalLocation
+                    detectedElementScreenLocation = finalGlobalLocation
                     detectedElementDisplayFrame = displayFrame
                     ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
 
                     let screenIndexDescription = parseResult.screenNumber.map { "screen \($0)" } ?? "cursor screen"
-                    print("🎯 Element pointing: raw=(\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) norm=(\(String(format: "%.1f%%", normalizedX * 100)), \(String(format: "%.1f%%", normalizedY * 100))) on \(screenIndexDescription) (\(Int(displayWidth))x\(Int(displayHeight)) pt) → displayLocal=(\(Int(displayLocalX)), \(Int(displayLocalY))) global=(\(Int(globalLocation.x)), \(Int(globalLocation.y))) [\"\(parseResult.elementLabel ?? "element")\"]")
+                    print("🎯 Element pointing: raw=(\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) norm=(\(String(format: "%.1f%%", normalizedX * 100)), \(String(format: "%.1f%%", normalizedY * 100))) on \(screenIndexDescription) (\(Int(displayWidth))x\(Int(displayHeight)) pt) → displayLocal=(\(Int(displayLocalX)), \(Int(displayLocalY))) global=(\(Int(finalGlobalLocation.x)), \(Int(finalGlobalLocation.y))) [\"\(parseResult.elementLabel ?? "element")\"] size=(\(Int(finalHighlightWidth))x\(Int(finalHighlightHeight)))")
                 } else {
                     print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
                 }
@@ -945,6 +959,33 @@ final class CompanionManager: ObservableObject {
             elementLabel: parsedLabel,
             screenNumber: parsedScreenNumber
         )
+    }
+
+    /// Extracts candidate keywords from the element label and transcript to search for via Apple Vision OCR.
+    private static func buildCandidateKeywords(label: String?, transcript: String) -> [String] {
+        var candidates: [String] = []
+
+        if let label = label, !label.isEmpty && label.lowercased() != "none" {
+            candidates.append(label)
+            let words = label.components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { $0.count >= 3 }
+            candidates.append(contentsOf: words)
+        }
+
+        let stopWords: Set<String> = [
+            "wo", "finde", "ich", "den", "die", "das", "der", "ein", "eine",
+            "button", "symbol", "icon", "bitte", "kannst", "du", "mir", "zeigen",
+            "nochmal", "anzeigen", "klicken", "klicke", "auf", "hier", "ist",
+            "where", "is", "the", "how", "to", "click", "show", "me", "again"
+        ]
+
+        let transcriptWords = transcript.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 3 && !stopWords.contains($0.lowercased()) }
+
+        candidates.append(contentsOf: transcriptWords)
+
+        var seen = Set<String>()
+        return candidates.filter { seen.insert($0.lowercased()).inserted }
     }
 
     // MARK: - Onboarding Video

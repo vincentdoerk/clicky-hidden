@@ -9,9 +9,18 @@
 
 import AppKit
 import ScreenCaptureKit
+import Vision
+
+/// Result of matching a UI text element in the screenshot via Apple Vision OCR.
+struct ScreenTextMatch {
+    let text: String
+    let globalRect: CGRect
+    let globalCenter: CGPoint
+}
 
 struct CompanionScreenCapture {
     let imageData: Data
+    let cgImage: CGImage?
     let label: String
     let isCursorScreen: Bool
     let cursorLocationOnScreen: CGPoint?
@@ -89,7 +98,7 @@ enum CompanionScreenCaptureUtility {
             let filter = SCContentFilter(display: display, excludingWindows: ownAppWindows)
 
             let configuration = SCStreamConfiguration()
-            let maxDimension = 1280
+            let maxDimension = 1920
             let aspectRatio = CGFloat(display.width) / CGFloat(display.height)
             if display.width >= display.height {
                 configuration.width = maxDimension
@@ -105,7 +114,7 @@ enum CompanionScreenCaptureUtility {
             )
 
             guard let jpegData = NSBitmapImageRep(cgImage: cgImage)
-                    .representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
+                    .representation(using: .jpeg, properties: [.compressionFactor: 0.85]) else {
                 continue
             }
 
@@ -130,6 +139,7 @@ enum CompanionScreenCaptureUtility {
 
             capturedScreens.append(CompanionScreenCapture(
                 imageData: jpegData,
+                cgImage: cgImage,
                 label: screenLabel,
                 isCursorScreen: isCursorScreen,
                 cursorLocationOnScreen: cursorLocationOnScreen,
@@ -148,5 +158,130 @@ enum CompanionScreenCaptureUtility {
         }
 
         return capturedScreens
+    }
+
+    /// Uses Apple's local Vision framework (VNRecognizeTextRequest) to find the exact bounding
+    /// box of a UI text element near the estimated location returned by the vision model.
+    /// If a match is found, returns the pixel-precise location and bounding box; otherwise nil.
+    static func snapToMatchingTextElement(
+        candidateKeywords: [String],
+        near estimatedGlobalLocation: CGPoint,
+        targetScreenCapture: CompanionScreenCapture
+    ) -> ScreenTextMatch? {
+        guard let cgImage = targetScreenCapture.cgImage else { return nil }
+
+        let displayWidth = CGFloat(targetScreenCapture.displayWidthInPoints)
+        let displayHeight = CGFloat(targetScreenCapture.displayHeightInPoints)
+        let displayOrigin = targetScreenCapture.displayFrame.origin
+
+        // Normalized location of estimate in AppKit coordinates (bottom-left origin)
+        let localEstimatedX = (estimatedGlobalLocation.x - displayOrigin.x) / displayWidth
+        let localEstimatedY = (estimatedGlobalLocation.y - displayOrigin.y) / displayHeight
+
+        // Define Region of Interest (ROI) around estimated location (+-20% horizontal, +-20% vertical)
+        let halfSpanX: CGFloat = 0.20
+        let halfSpanY: CGFloat = 0.20
+        let roiMinX = max(0.0, localEstimatedX - halfSpanX)
+        let roiMaxX = min(1.0, localEstimatedX + halfSpanX)
+        let roiMinY = max(0.0, localEstimatedY - halfSpanY)
+        let roiMaxY = min(1.0, localEstimatedY + halfSpanY)
+        let roi = CGRect(x: roiMinX, y: roiMinY, width: max(0.05, roiMaxX - roiMinX), height: max(0.05, roiMaxY - roiMinY))
+
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        request.recognitionLanguages = ["de-DE", "en-US"]
+        request.regionOfInterest = roi
+
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return nil
+        }
+
+        guard let observations = request.results, !observations.isEmpty else { return nil }
+
+        // Clean candidate keywords (remove punctuation, lowercased, length >= 2)
+        let cleanKeywords = candidateKeywords
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { $0.count >= 2 }
+
+        guard !cleanKeywords.isEmpty else { return nil }
+
+        var bestMatch: ScreenTextMatch? = nil
+        var bestScore: Double = -1.0
+        var closestDistance: CGFloat = CGFloat.greatestFiniteMagnitude
+
+        for observation in observations {
+            guard let topCandidate = observation.topCandidates(1).first else { continue }
+            let recognizedText = topCandidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lowerRecognized = recognizedText.lowercased()
+
+            // Calculate global AppKit frame from ROI-relative observation box
+            let roiBox = observation.boundingBox
+            let normX = roi.origin.x + (roiBox.origin.x * roi.width)
+            let normY = roi.origin.y + (roiBox.origin.y * roi.height)
+            let normW = roiBox.width * roi.width
+            let normH = roiBox.height * roi.height
+
+            let elementDisplayX = normX * displayWidth
+            let elementDisplayY = normY * displayHeight
+            let elementWidth = normW * displayWidth
+            let elementHeight = normH * displayHeight
+
+            // Add comfortable padding around recognized text so the bounding box frames the full button/row
+            let paddedWidth = max(elementWidth + 18.0, 75.0)
+            let paddedHeight = max(elementHeight + 8.0, 28.0)
+            let paddedDisplayX = max(0.0, elementDisplayX - 8.0)
+            let paddedDisplayY = max(0.0, elementDisplayY - 4.0)
+
+            let globalRect = CGRect(
+                x: paddedDisplayX + displayOrigin.x,
+                y: paddedDisplayY + displayOrigin.y,
+                width: paddedWidth,
+                height: paddedHeight
+            )
+            let globalCenter = CGPoint(x: globalRect.midX, y: globalRect.midY)
+
+            let distance = hypot(globalCenter.x - estimatedGlobalLocation.x, globalCenter.y - estimatedGlobalLocation.y)
+
+            // Score match quality
+            var matchQuality: Double = 0.0
+            let recognizedWords = lowerRecognized.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+
+            for keyword in cleanKeywords {
+                if lowerRecognized == keyword {
+                    matchQuality = max(matchQuality, 4.0) // Exact phrase match
+                } else if recognizedWords.contains(keyword) {
+                    matchQuality = max(matchQuality, 3.0) // Whole word match
+                } else if lowerRecognized.contains(keyword) {
+                    matchQuality = max(matchQuality, 2.2) // Substring match
+                } else if keyword.contains(lowerRecognized) && lowerRecognized.count >= 3 {
+                    matchQuality = max(matchQuality, 1.5)
+                }
+            }
+
+            guard matchQuality > 0 else { continue }
+
+            // Score combining match quality and proximity
+            let combinedScore = matchQuality * 1000.0 - Double(distance)
+
+            if combinedScore > bestScore {
+                bestScore = combinedScore
+                closestDistance = distance
+                bestMatch = ScreenTextMatch(
+                    text: recognizedText,
+                    globalRect: globalRect,
+                    globalCenter: globalCenter
+                )
+            }
+        }
+
+        if let match = bestMatch {
+            print("🎯 ScreenTextLocator: snapped to \"\(match.text)\" at (center: \(Int(match.globalCenter.x)), \(Int(match.globalCenter.y))), size: \(Int(match.globalRect.width))x\(Int(match.globalRect.height)) (distance: \(Int(closestDistance))pt from estimate)")
+        }
+
+        return bestMatch
     }
 }
