@@ -752,6 +752,7 @@ final class CompanionManager: ObservableObject {
                     // snap the coordinate and bounding box to the exact text element!
                     let candidateKeywords = Self.buildCandidateKeywords(label: parseResult.elementLabel, transcript: transcript)
                     if let snappedMatch = CompanionScreenCaptureUtility.snapToMatchingTextElement(
+                        primaryTargetLabel: parseResult.elementLabel,
                         candidateKeywords: candidateKeywords,
                         near: finalGlobalLocation,
                         targetScreenCapture: targetScreenCapture

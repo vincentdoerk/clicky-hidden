@@ -164,6 +164,7 @@ enum CompanionScreenCaptureUtility {
     /// box of a UI text element near the estimated location returned by the vision model.
     /// If a match is found, returns the pixel-precise location and bounding box; otherwise nil.
     static func snapToMatchingTextElement(
+        primaryTargetLabel: String?,
         candidateKeywords: [String],
         near estimatedGlobalLocation: CGPoint,
         targetScreenCapture: CompanionScreenCapture
@@ -202,21 +203,31 @@ enum CompanionScreenCaptureUtility {
 
         guard let observations = request.results, !observations.isEmpty else { return nil }
 
+        // Prepare normalized target phrase and words
+        let rawTarget = primaryTargetLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalizedPrimaryTarget = normalizeTextForComparison(rawTarget)
+        let primaryTargetWords = normalizedPrimaryTarget.components(separatedBy: " ").filter { $0.count >= 2 }
+
         // Clean candidate keywords (remove punctuation, lowercased, length >= 2)
         let cleanKeywords = candidateKeywords
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .map { normalizeTextForComparison($0) }
             .filter { $0.count >= 2 }
 
-        guard !cleanKeywords.isEmpty else { return nil }
+        guard !normalizedPrimaryTarget.isEmpty || !cleanKeywords.isEmpty else { return nil }
 
         var bestMatch: ScreenTextMatch? = nil
-        var bestScore: Double = -1.0
+        var bestScore: Double = 0.0
+        var bestMatchType: String = "none"
         var closestDistance: CGFloat = CGFloat.greatestFiniteMagnitude
 
         for observation in observations {
             guard let topCandidate = observation.topCandidates(1).first else { continue }
             let recognizedText = topCandidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
-            let lowerRecognized = recognizedText.lowercased()
+            guard !recognizedText.isEmpty else { continue }
+
+            let normalizedObserved = normalizeTextForComparison(recognizedText)
+            let observedWords = normalizedObserved.components(separatedBy: " ").filter { !$0.isEmpty }
+            guard !observedWords.isEmpty else { continue }
 
             // Calculate global AppKit frame from ROI-relative observation box
             let roiBox = observation.boundingBox
@@ -244,32 +255,128 @@ enum CompanionScreenCaptureUtility {
             )
             let globalCenter = CGPoint(x: globalRect.midX, y: globalRect.midY)
 
-            let distance = hypot(globalCenter.x - estimatedGlobalLocation.x, globalCenter.y - estimatedGlobalLocation.y)
+            // Clamped distances to the bounding box:
+            let horizontalDistanceToBox: CGFloat
+            if estimatedGlobalLocation.x < globalRect.minX {
+                horizontalDistanceToBox = globalRect.minX - estimatedGlobalLocation.x
+            } else if estimatedGlobalLocation.x > globalRect.maxX {
+                horizontalDistanceToBox = estimatedGlobalLocation.x - globalRect.maxX
+            } else {
+                horizontalDistanceToBox = 0.0
+            }
+
+            let verticalDistanceToBox: CGFloat
+            if estimatedGlobalLocation.y < globalRect.minY {
+                verticalDistanceToBox = globalRect.minY - estimatedGlobalLocation.y
+            } else if estimatedGlobalLocation.y > globalRect.maxY {
+                verticalDistanceToBox = estimatedGlobalLocation.y - globalRect.maxY
+            } else {
+                verticalDistanceToBox = 0.0
+            }
+
+            // In GUI layouts (especially lists, sidebars, menus), items are stacked vertically.
+            // A vertical difference of 30pt is a completely different item/row!
+            // A horizontal difference is often just clicking further along the row or button.
+            // Therefore, heavily penalize vertical distance compared to horizontal distance.
+            let effectiveDistance = sqrt(pow(horizontalDistanceToBox * 0.5, 2) + pow(verticalDistanceToBox * 3.0, 2))
 
             // Score match quality
-            var matchQuality: Double = 0.0
-            let recognizedWords = lowerRecognized.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+            var textMatchScore: Double = 0.0
+            var currentMatchType: String = "none"
 
-            for keyword in cleanKeywords {
-                if lowerRecognized == keyword {
-                    matchQuality = max(matchQuality, 4.0) // Exact phrase match
-                } else if recognizedWords.contains(keyword) {
-                    matchQuality = max(matchQuality, 3.0) // Whole word match
-                } else if lowerRecognized.contains(keyword) {
-                    matchQuality = max(matchQuality, 2.2) // Substring match
-                } else if keyword.contains(lowerRecognized) && lowerRecognized.count >= 3 {
-                    matchQuality = max(matchQuality, 1.5)
+            // 1. PRIMARY TARGET MATCHING (e.g. from Ollama's label: "dance playlist")
+            if !normalizedPrimaryTarget.isEmpty {
+                if normalizedObserved == normalizedPrimaryTarget {
+                    // Exact full match (e.g. "Dance • Playlist" normalized equals "dance playlist")
+                    textMatchScore = 10000.0
+                    currentMatchType = "exact-full"
+                } else if normalizedObserved.hasPrefix(normalizedPrimaryTarget + " ") {
+                    // Starts with target phrase
+                    textMatchScore = 8000.0
+                    currentMatchType = "starts-with-target"
+                } else if normalizedObserved.contains(normalizedPrimaryTarget) {
+                    // Contains target phrase
+                    textMatchScore = 6500.0
+                    currentMatchType = "contains-target"
+                } else if !primaryTargetWords.isEmpty {
+                    // Token-based matching against primary target words
+                    var matchedWordsCount = 0
+                    for targetWord in primaryTargetWords {
+                        if observedWords.contains(where: { areWordsEquivalentOrStems($0, targetWord) }) {
+                            matchedWordsCount += 1
+                        }
+                    }
+
+                    let coverage = Double(matchedWordsCount) / Double(primaryTargetWords.count)
+                    if coverage > 0.0 {
+                        var tokenScore = coverage * 4000.0
+
+                        // Starts-with bonus: if first word matches
+                        if let firstTarget = primaryTargetWords.first,
+                           let firstObserved = observedWords.first,
+                           areWordsEquivalentOrStems(firstObserved, firstTarget) {
+                            tokenScore += 1500.0
+                        }
+
+                        // Precision / noise ratio
+                        let precision = Double(matchedWordsCount) / Double(observedWords.count)
+                        tokenScore += precision * 800.0
+
+                        if tokenScore > textMatchScore {
+                            textMatchScore = tokenScore
+                            currentMatchType = "token-coverage(\(matchedWordsCount)/\(primaryTargetWords.count))"
+                        }
+                    }
                 }
             }
 
-            guard matchQuality > 0 else { continue }
+            // 2. SECONDARY KEYWORD MATCHING
+            if textMatchScore < 3000.0 {
+                for keyword in cleanKeywords {
+                    if keyword.isEmpty { continue }
+                    if normalizedObserved == keyword {
+                        let score = 3500.0
+                        if score > textMatchScore {
+                            textMatchScore = score
+                            currentMatchType = "keyword-exact(\(keyword))"
+                        }
+                    } else if let firstObserved = observedWords.first, areWordsEquivalentOrStems(firstObserved, keyword) {
+                        let score = 2500.0
+                        if score > textMatchScore {
+                            textMatchScore = score
+                            currentMatchType = "keyword-prefix(\(keyword))"
+                        }
+                    } else if observedWords.contains(where: { areWordsEquivalentOrStems($0, keyword) }) {
+                        let score = 1800.0
+                        if score > textMatchScore {
+                            textMatchScore = score
+                            currentMatchType = "keyword-word(\(keyword))"
+                        }
+                    } else if normalizedObserved.contains(keyword) {
+                        let score = 1200.0
+                        if score > textMatchScore {
+                            textMatchScore = score
+                            currentMatchType = "keyword-substring(\(keyword))"
+                        }
+                    }
+                }
+            }
 
-            // Score combining match quality and proximity
-            let combinedScore = matchQuality * 1000.0 - Double(distance)
+            // Threshold: require at least a modest match
+            guard textMatchScore >= 1000.0 else { continue }
+
+            // Proximity bonus if vertically aligned with the target row
+            var proximityScore: Double = -Double(effectiveDistance)
+            if verticalDistanceToBox == 0.0 {
+                proximityScore += 500.0
+            }
+
+            let combinedScore = textMatchScore + proximityScore
 
             if combinedScore > bestScore {
                 bestScore = combinedScore
-                closestDistance = distance
+                bestMatchType = currentMatchType
+                closestDistance = effectiveDistance
                 bestMatch = ScreenTextMatch(
                     text: recognizedText,
                     globalRect: globalRect,
@@ -279,9 +386,28 @@ enum CompanionScreenCaptureUtility {
         }
 
         if let match = bestMatch {
-            print("🎯 ScreenTextLocator: snapped to \"\(match.text)\" at (center: \(Int(match.globalCenter.x)), \(Int(match.globalCenter.y))), size: \(Int(match.globalRect.width))x\(Int(match.globalRect.height)) (distance: \(Int(closestDistance))pt from estimate)")
+            print("🎯 ScreenTextLocator: snapped to \"\(match.text)\" at (center: \(Int(match.globalCenter.x)), \(Int(match.globalCenter.y))), size: \(Int(match.globalRect.width))x\(Int(match.globalRect.height)) (score: \(Int(bestScore)), type: \(bestMatchType))")
         }
 
         return bestMatch
+    }
+
+    /// Normalizes text by lowercasing and replacing all non-alphanumeric characters with spaces,
+    /// then collapsing consecutive spaces. Example: "Dance • Playlist" -> "dance playlist"
+    private static func normalizeTextForComparison(_ text: String) -> String {
+        let lowercasedText = text.lowercased()
+        let words = lowercasedText.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        return words.joined(separator: " ")
+    }
+
+    /// Checks if two words match or share a common stem (e.g. "dance" and "dancing", "suche" and "suchen", "playlist" and "playlists")
+    private static func areWordsEquivalentOrStems(_ word1: String, _ word2: String) -> Bool {
+        if word1 == word2 { return true }
+        let minLength = min(word1.count, word2.count)
+        if minLength >= 4 && (word1.hasPrefix(word2) || word2.hasPrefix(word1)) {
+            return true
+        }
+        return false
     }
 }
