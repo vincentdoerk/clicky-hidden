@@ -41,6 +41,8 @@ final class CompanionManager: ObservableObject {
     /// Custom speech bubble text for the pointing animation. When set,
     /// BlueCursorView uses this instead of a random pointer phrase.
     @Published var detectedElementBubbleText: String?
+    /// Bounding box size (in display points) of the detected UI element for the highlight overlay.
+    @Published var detectedElementHighlightSize: CGSize?
 
     // MARK: - Onboarding Video State (shared across all screen overlays)
 
@@ -304,6 +306,7 @@ final class CompanionManager: ObservableObject {
 
     func clearDetectedElementLocation() {
         detectedElementScreenLocation = nil
+        detectedElementHighlightSize = nil
         detectedElementDisplayFrame = nil
         detectedElementBubbleText = nil
     }
@@ -597,20 +600,24 @@ final class CompanionManager: ObservableObject {
     origin (0,0) is top-left, (1000,1000) is bottom-right.
     x ranges from 0 (far left) to 1000 (far right).
     y ranges from 0 (top) to 1000 (bottom).
-    always point at the EXACT center of the specific button, icon, or clickable element.
+    always point at the EXACT center of the entire clickable button or element.
+    CRITICAL: if a button contains both an icon and text (e.g. "[Fox] GitLab Docs" or "[+] Erstellen"), point at the center of the ENTIRE button (including the text), NOT just the icon on the left edge!
 
-    format: append [POINT:x,y:label] or [POINT:x,y:label:screenN] at the end of your response.
-    - x, y: integer coordinates normalized from 0 to 1000.
-    - label: short description (1-3 words, like "play button" or "search bar").
+    format: append [POINT:x,y:w,h:label] or [POINT:x,y:label] (with optional :screenN) at the end of your response.
+    - x, y: integer center coordinates normalized from 0 to 1000.
+    - w, h: optional width and height of the element bounding box normalized from 0 to 1000 (e.g. 110,36).
+    - label: short description (1-3 words, like "gitlab logo" or "erstellen").
     - if the element is on the primary screen (cursor screen), omit screen number or append :screen1.
-    - if the element is on screen 2, append :screen2 (e.g. [POINT:450,300:terminal:screen2]).
+    - if the element is on screen 2, append :screen2 (e.g. [POINT:450,300:120,40:terminal:screen2]).
     - if pointing wouldn't help, append [POINT:none].
 
     examples:
-    - user asks for the Apple menu: "hier ist das apple-menü ganz oben links. [POINT:8,10:apple-menü]"
-    - user asks how to search in spotify: "klicke oben auf suchen. [POINT:245,28:suche]"
+    - user asks for Apple menu: "hier ist das apple-menü ganz oben links. [POINT:12,12:25,25:apple-menü]"
+    - user asks for GitLab Docs logo button: "hier ist das gitlab docs logo. [POINT:250,102:115,36:gitlab docs logo]"
+    - user asks for Spotify create button: "klicke hier auf erstellen. [POINT:480,210:95,35:erstellen]"
+    - user asks how to search in spotify: "klicke oben auf suchen. [POINT:245,28:120,32:suche]"
     - user asks what html is: "html ist die grundstruktur jeder webseite. [POINT:none]"
-    - element is on screen 2: "das terminal ist drüben auf deinem zweiten monitor. [POINT:450,320:terminal:screen2]"
+    - element is on screen 2: "das terminal ist drüben auf deinem zweiten monitor. [POINT:450,320:200,80:terminal:screen2]"
     """
 
     // MARK: - AI Response Pipeline
@@ -725,6 +732,23 @@ final class CompanionManager: ObservableObject {
                         y: appKitY + displayFrame.origin.y
                     )
 
+                    // Calculate highlight bounding box size in display points
+                    let highlightWidth: CGFloat
+                    let highlightHeight: CGFloat
+                    if let parsedSize = parseResult.size, parsedSize.width > 0 && parsedSize.height > 0 {
+                        let isSizeNorm = parsedSize.width <= 1000.0 && parsedSize.height <= 1000.0
+                        let normW = isSizeNorm ? (parsedSize.width / 1000.0) : (parsedSize.width / CGFloat(targetScreenCapture.screenshotWidthInPixels))
+                        let normH = isSizeNorm ? (parsedSize.height / 1000.0) : (parsedSize.height / CGFloat(targetScreenCapture.screenshotHeightInPixels))
+                        highlightWidth = max(50.0, min(normW * displayWidth, 600.0))
+                        highlightHeight = max(24.0, min(normH * displayHeight, 300.0))
+                    } else {
+                        // Default element highlight box size
+                        highlightWidth = 140.0
+                        highlightHeight = 38.0
+                    }
+
+                    detectedElementHighlightSize = CGSize(width: highlightWidth, height: highlightHeight)
+                    detectedElementBubbleText = parseResult.elementLabel
                     detectedElementScreenLocation = globalLocation
                     detectedElementDisplayFrame = displayFrame
                     ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
@@ -818,76 +842,107 @@ final class CompanionManager: ObservableObject {
 
     // MARK: - Point Tag Parsing
 
-    /// Result of parsing a [POINT:...] tag from Claude's response.
+    /// Result of parsing a [POINT:...] tag from the model's response.
     struct PointingParseResult {
         /// The response text with the [POINT:...] tag removed — this is what gets spoken.
         let spokenText: String
-        /// The parsed pixel coordinate, or nil if Claude said "none" or no tag was found.
+        /// The parsed center coordinate (normalized 0..1000), or nil if none found.
         let coordinate: CGPoint?
-        /// Short label describing the element (e.g. "run button"), or "none".
+        /// The parsed bounding box size (normalized 0..1000), or nil if not provided.
+        let size: CGSize?
+        /// Short label describing the element (e.g. "gitlab logo"), or nil.
         let elementLabel: String?
         /// Which screen the coordinate refers to (1-based), or nil to default to cursor screen.
         let screenNumber: Int?
     }
 
-    /// Parses a [POINT:x,y:label:screenN] or [POINT:none] tag from the model's response.
-    /// Returns the spoken text (tag removed) and the optional coordinate + label + screen number.
+    /// Parses a [POINT:x,y:w,h:label:screenN] or [POINT:x,y:label] or [POINT:none] tag from the model's response.
+    /// Returns the spoken text (tag removed) along with coordinates, optional bounding box size, label, and screen number.
     static func parsePointingCoordinates(from responseText: String) -> PointingParseResult {
-        // Tolerantly match [POINT:none] or [POINT:x,y:label:screenN] or [POINT:x,y:label] or [POINT:x,y] or [x,y:label]
-        let pattern = #"\[(?:POINT\s*:\s*)?(?:none|(\d+)\s*,\s*(\d+)(?:\s*:\s*([^\]:\n]+?))?(?:\s*:\s*screen\s*(\d+))?)\s*\]"#
-
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return PointingParseResult(spokenText: responseText, coordinate: nil, elementLabel: nil, screenNumber: nil)
+        let tagPattern = #"\[(?:POINT\s*:\s*)?([^\]\n]+)\]"#
+        guard let regex = try? NSRegularExpression(pattern: tagPattern, options: [.caseInsensitive]) else {
+            return PointingParseResult(spokenText: responseText, coordinate: nil, size: nil, elementLabel: nil, screenNumber: nil)
         }
 
         let fullRange = NSRange(responseText.startIndex..., in: responseText)
         let matches = regex.matches(in: responseText, options: [], range: fullRange)
 
-        guard let lastMatch = matches.last else {
-            return PointingParseResult(spokenText: responseText, coordinate: nil, elementLabel: nil, screenNumber: nil)
+        guard let lastMatch = matches.last,
+              let fullMatchRange = Range(lastMatch.range, in: responseText),
+              let innerMatchRange = Range(lastMatch.range(at: 1), in: responseText) else {
+            return PointingParseResult(spokenText: responseText, coordinate: nil, size: nil, elementLabel: nil, screenNumber: nil)
         }
 
-        // Remove the matched tag from the spoken text so TTS does not read "[POINT:...]" aloud
         var cleanSpokenText = responseText
-        if let matchRange = Range(lastMatch.range, in: responseText) {
-            cleanSpokenText.removeSubrange(matchRange)
-            cleanSpokenText = cleanSpokenText.trimmingCharacters(in: .whitespacesAndNewlines)
+        cleanSpokenText.removeSubrange(fullMatchRange)
+        cleanSpokenText = cleanSpokenText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let innerTag = String(responseText[innerMatchRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if innerTag.lowercased() == "none" {
+            return PointingParseResult(spokenText: cleanSpokenText, coordinate: nil, size: nil, elementLabel: "none", screenNumber: nil)
         }
 
-        // Check if it was [POINT:none] (no coordinate capture groups)
-        guard lastMatch.numberOfRanges >= 3,
-              let xRange = Range(lastMatch.range(at: 1), in: responseText),
-              let yRange = Range(lastMatch.range(at: 2), in: responseText),
-              let xCoordinate = Double(responseText[xRange]),
-              let yCoordinate = Double(responseText[yRange]) else {
-            return PointingParseResult(spokenText: cleanSpokenText, coordinate: nil, elementLabel: "none", screenNumber: nil)
+        let tokens = innerTag.components(separatedBy: ":").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard !tokens.isEmpty else {
+            return PointingParseResult(spokenText: cleanSpokenText, coordinate: nil, size: nil, elementLabel: nil, screenNumber: nil)
         }
 
-        var parsedElementLabel: String? = nil
+        var parsedCoordinate: CGPoint? = nil
+        var parsedSize: CGSize? = nil
+        var parsedLabel: String? = nil
         var parsedScreenNumber: Int? = nil
 
-        if lastMatch.numberOfRanges >= 4, let labelRange = Range(lastMatch.range(at: 3), in: responseText) {
-            let candidateLabel = String(responseText[labelRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-            // If the label is like "screen2", parse it as screen number instead
-            if let screenMatch = candidateLabel.range(of: #"^screen\s*(\d+)$"#, options: [.regularExpression, .caseInsensitive]) {
-                let digits = candidateLabel[screenMatch].filter(\.isNumber)
-                parsedScreenNumber = Int(digits)
-            } else if !candidateLabel.isEmpty {
-                parsedElementLabel = candidateLabel
+        var remainingTokens = tokens
+
+        func extractNumbers(from string: String) -> [Double] {
+            string.split(whereSeparator: { $0 == "," || $0 == " " || $0 == "x" })
+                .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        }
+
+        // Check if token 0 has 2 or 4 numbers (e.g. "x,y" or "x,y,w,h")
+        if !remainingTokens.isEmpty {
+            let nums = extractNumbers(from: remainingTokens[0])
+            if nums.count >= 4 {
+                parsedCoordinate = CGPoint(x: nums[0], y: nums[1])
+                parsedSize = CGSize(width: nums[2], height: nums[3])
+                remainingTokens.removeFirst()
+            } else if nums.count >= 2 {
+                parsedCoordinate = CGPoint(x: nums[0], y: nums[1])
+                remainingTokens.removeFirst()
             }
         }
 
-        if lastMatch.numberOfRanges >= 5, let screenRange = Range(lastMatch.range(at: 4), in: responseText) {
-            let screenText = String(responseText[screenRange]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if let extractedScreenNumber = Int(screenText) {
-                parsedScreenNumber = extractedScreenNumber
+        // Check if token 1 provides w,h size (e.g. "115,36")
+        if parsedSize == nil && !remainingTokens.isEmpty {
+            let nums = extractNumbers(from: remainingTokens[0])
+            if nums.count >= 2 {
+                parsedSize = CGSize(width: nums[0], height: nums[1])
+                remainingTokens.removeFirst()
+            }
+        }
+
+        // Check remaining tokens for screen number and label
+        for token in remainingTokens {
+            let lower = token.lowercased()
+            if let screenMatch = lower.range(of: #"^screen\s*(\d+)$"#, options: [.regularExpression]) {
+                let digits = lower[screenMatch].filter(\.isNumber)
+                if let num = Int(digits) {
+                    parsedScreenNumber = num
+                }
+            } else if !token.isEmpty {
+                if parsedLabel == nil {
+                    parsedLabel = token
+                } else {
+                    parsedLabel = (parsedLabel ?? "") + " " + token
+                }
             }
         }
 
         return PointingParseResult(
             spokenText: cleanSpokenText,
-            coordinate: CGPoint(x: xCoordinate, y: yCoordinate),
-            elementLabel: parsedElementLabel,
+            coordinate: parsedCoordinate,
+            size: parsedSize,
+            elementLabel: parsedLabel,
             screenNumber: parsedScreenNumber
         )
     }

@@ -165,6 +165,11 @@ struct BlueCursorView: View {
     /// Only during the return flight can cursor movement cancel the animation.
     @State private var isReturningToCursor: Bool = false
 
+    /// Bounding rectangle for highlighting the targeted UI element on this screen.
+    @State private var targetHighlightRect: CGRect?
+    /// Whether the target element highlight overlay is visible.
+    @State private var showTargetHighlight: Bool = false
+
     // MARK: - Onboarding Video Layout
 
     private let onboardingVideoPlayerWidth: CGFloat = 330
@@ -256,6 +261,41 @@ struct BlueCursorView: View {
                     .onPreferenceChange(SizePreferenceKey.self) { newSize in
                         bubbleSize = newSize
                     }
+            }
+
+            // Element Highlight Overlay — Semi-transparent blue fill (~20%) + dashed border + anchor dot.
+            // Highlights the targeted UI element when Clicky arrives at the destination (matches Image 2).
+            if let highlightRect = targetHighlightRect, showTargetHighlight {
+                ZStack {
+                    // ~20% Opacity blue fill with rounded corners
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(DS.Colors.overlayCursorBlue.opacity(0.20))
+
+                    // Dashed blue border
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(
+                            DS.Colors.overlayCursorBlue,
+                            style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
+                        )
+                        .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.4), radius: 6, x: 0, y: 0)
+
+                    // Glowing corner anchor handle dot at the bottom-right corner
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 7, height: 7)
+                        .overlay(
+                            Circle()
+                                .stroke(DS.Colors.overlayCursorBlue, lineWidth: 1.5)
+                        )
+                        .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.8), radius: 4, x: 0, y: 0)
+                        .position(x: highlightRect.width, y: highlightRect.height)
+                }
+                .frame(width: highlightRect.width, height: highlightRect.height)
+                .position(x: highlightRect.midX, y: highlightRect.midY)
+                .scaleEffect(showTargetHighlight ? 1.0 : 0.85)
+                .opacity(showTargetHighlight ? 1.0 : 0.0)
+                .animation(.spring(response: 0.35, dampingFraction: 0.7), value: showTargetHighlight)
+                .allowsHitTesting(false)
             }
 
             // Navigation pointer bubble — shown when buddy arrives at a detected element.
@@ -481,18 +521,30 @@ struct BlueCursorView: View {
         // Convert the AppKit screen location to SwiftUI coordinates for this screen
         let targetInSwiftUI = convertScreenPointToSwiftUICoordinates(screenLocation)
 
-        // Offset the target so the buddy's triangle tip points directly at the element.
-        // The triangle is 16x16 with its tip pointing up-left (-35° rotation).
-        // Placing the center at (+6, +7) aligns the tip precisely on targetInSwiftUI.
-        let offsetTarget = CGPoint(
-            x: targetInSwiftUI.x + 6,
-            y: targetInSwiftUI.y + 7
-        )
+        // Highlight box size (from AI detection or fallback default)
+        let boxSize = companionManager.detectedElementHighlightSize ?? CGSize(width: 140, height: 38)
+        let boxWidth = boxSize.width
+        let boxHeight = boxSize.height
 
-        // Clamp target to screen bounds with padding
+        // Calculate bounding box centered around the target element, clamped inside screen frame
+        let rawBoxOrigin = CGPoint(
+            x: targetInSwiftUI.x - boxWidth / 2.0,
+            y: targetInSwiftUI.y - boxHeight / 2.0
+        )
+        let clampedBoxX = max(10, min(rawBoxOrigin.x, screenFrame.width - boxWidth - 10))
+        let clampedBoxY = max(10, min(rawBoxOrigin.y, screenFrame.height - boxHeight - 10))
+        let finalBoxRect = CGRect(x: clampedBoxX, y: clampedBoxY, width: boxWidth, height: boxHeight)
+        self.targetHighlightRect = finalBoxRect
+
+        // As shown in Image 2, Clicky lands at the bottom-right corner of the highlighted box!
+        // With triangle rotation -35°, center offset by (+6, +7) touches the corner anchor dot.
+        let targetCornerX = finalBoxRect.maxX + 6
+        let targetCornerY = finalBoxRect.maxY + 7
+
+        // Clamp destination to screen bounds with padding
         let clampedTarget = CGPoint(
-            x: max(20, min(offsetTarget.x, screenFrame.width - 20)),
-            y: max(20, min(offsetTarget.y, screenFrame.height - 20))
+            x: max(20, min(targetCornerX, screenFrame.width - 20)),
+            y: max(20, min(targetCornerY, screenFrame.height - 20))
         )
 
         // Determine initial start point from the live mouse position
@@ -504,6 +556,7 @@ struct BlueCursorView: View {
         // Enter navigation mode — regular cursor following is paused while flight handles live tracking
         buddyNavigationMode = .navigatingToTarget
         isReturningToCursor = false
+        showTargetHighlight = false
 
         animateDynamicFlightToTarget(destination: clampedTarget) {
             guard self.buddyNavigationMode == .navigatingToTarget else { return }
@@ -684,6 +737,11 @@ struct BlueCursorView: View {
         // Rotate back to default pointer angle now that we've arrived
         triangleRotationDegrees = -35.0
 
+        // Pop in the semi-transparent blue highlight overlay around the element
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+            showTargetHighlight = true
+        }
+
         // Reset navigation bubble state — start small for the scale-bounce entrance
         navigationBubbleText = ""
         navigationBubbleOpacity = 1.0
@@ -701,7 +759,10 @@ struct BlueCursorView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                 guard self.buddyNavigationMode == .pointingAtTarget else { return }
                 self.navigationBubbleOpacity = 0.0
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    self.showTargetHighlight = false
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                     guard self.buddyNavigationMode == .pointingAtTarget else { return }
                     self.startFlyingBackToCursor()
                 }
@@ -759,6 +820,7 @@ struct BlueCursorView: View {
             withAnimation(.easeOut(duration: 0.3)) {
                 self.navigationBubbleOpacity = 0.0
                 self.cursorOpacity = 0.0
+                self.showTargetHighlight = false
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 self.finishNavigationAndResumeFollowing()
@@ -770,6 +832,8 @@ struct BlueCursorView: View {
     private func cancelNavigationAndResumeFollowing() {
         navigationAnimationTimer?.invalidate()
         navigationAnimationTimer = nil
+        showTargetHighlight = false
+        targetHighlightRect = nil
         navigationBubbleText = ""
         navigationBubbleOpacity = 0.0
         navigationBubbleScale = 1.0
@@ -783,6 +847,8 @@ struct BlueCursorView: View {
         navigationAnimationTimer = nil
         buddyNavigationMode = .followingCursor
         isReturningToCursor = false
+        showTargetHighlight = false
+        targetHighlightRect = nil
         triangleRotationDegrees = -35.0
         buddyFlightScale = 1.0
         navigationBubbleText = ""
