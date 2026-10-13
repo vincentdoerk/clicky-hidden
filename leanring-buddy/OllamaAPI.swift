@@ -13,7 +13,7 @@ final class OllamaAPI {
     var selectedModelName: String
     private let urlSession: URLSession
 
-    init(baseURLString: String = "http://localhost:11434", selectedModelName: String = "llama3.2-vision") {
+    init(baseURLString: String = "http://127.0.0.1:11434", selectedModelName: String = "llama3.2-vision") {
         self.apiBaseURL = URL(string: baseURLString)!
         self.selectedModelName = selectedModelName
 

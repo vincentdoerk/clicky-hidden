@@ -10,5 +10,17 @@
 	<string>/l3d2rw5ZZFRU3AadP/w2Zf8FHfhA6bKv16BQOV5OSk=</string>
 	<key>VoiceTranscriptionProvider</key>
 	<string>whisper</string>
+	<key>TextToSpeechProvider</key>
+	<string>qwen3</string>
+	<key>LocalTTSServerPort</key>
+	<string>8765</string>
+	<key>LocalTTSServerBaseURL</key>
+	<string>http://127.0.0.1:8765</string>
+	<key>LocalTTSModel</key>
+	<string>mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit</string>
+	<key>LocalTTSVoice</key>
+	<string>Serena</string>
+	<key>LocalTTSLanguage</key>
+	<string>German</string>
 </dict>
 </plist>

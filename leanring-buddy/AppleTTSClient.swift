@@ -10,9 +10,14 @@ import AVFoundation
 import Foundation
 
 @MainActor
-final class AppleTTSClient: NSObject, AVSpeechSynthesizerDelegate {
+final class AppleTTSClient: NSObject, AVSpeechSynthesizerDelegate, TextToSpeechProvider {
     private let speechSynthesizer: AVSpeechSynthesizer
     private var isCurrentlySpeaking: Bool = false
+    private var onFirstAudioStartedForCurrentSession: (() -> Void)?
+    private var onPlaybackFinishedForCurrentSession: (() -> Void)?
+    private(set) var hasCurrentSessionStartedAudio: Bool = false
+
+    let displayName = "Apple Speech Synthesis"
 
     override init() {
         self.speechSynthesizer = AVSpeechSynthesizer()
@@ -20,9 +25,55 @@ final class AppleTTSClient: NSObject, AVSpeechSynthesizerDelegate {
         self.speechSynthesizer.delegate = self
     }
 
-    /// Whether text-to-speech audio is currently being spoken.
+    /// Whether text-to-speech audio is currently being spoken or queued.
     var isPlaying: Bool {
         return isCurrentlySpeaking || speechSynthesizer.isSpeaking
+    }
+
+    func prepare() {
+        // No background server needed for Apple Speech framework.
+    }
+
+    func shutdown() {
+        stopPlayback()
+    }
+
+    func beginSpeechSession(
+        onFirstAudioStarted: @escaping () -> Void,
+        onPlaybackFinished: (() -> Void)? = nil
+    ) {
+        stopPlayback()
+        self.onFirstAudioStartedForCurrentSession = onFirstAudioStarted
+        self.onPlaybackFinishedForCurrentSession = onPlaybackFinished
+        self.hasCurrentSessionStartedAudio = false
+    }
+
+    private var speechRateMultiplier: Double = {
+        let persistedRate = UserDefaults.standard.double(forKey: "selectedTTSSpeechRate")
+        return persistedRate > 0.1 ? persistedRate : 1.0
+    }()
+
+    func setSpeechRateMultiplier(_ newRateMultiplier: Double) {
+        self.speechRateMultiplier = newRateMultiplier
+    }
+
+    func enqueueSentenceForSpeech(_ sentenceText: String) {
+        let trimmedText = sentenceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+
+        let speechUtterance = AVSpeechUtterance(string: trimmedText)
+        speechUtterance.voice = selectBestSpeechVoice()
+        speechUtterance.rate = min(1.0, max(0.1, AVSpeechUtteranceDefaultSpeechRate * Float(speechRateMultiplier)))
+        speechUtterance.pitchMultiplier = 1.0
+        speechUtterance.volume = 1.0
+
+        isCurrentlySpeaking = true
+        speechSynthesizer.speak(speechUtterance)
+        print("🔊 Apple TTS: queued utterance (\(trimmedText.count) characters) with voice: \(speechUtterance.voice?.name ?? "default")")
+    }
+
+    func finishSpeechSession() {
+        // AVSpeechSynthesizer processes all queued utterances until done.
     }
 
     /// Speaks the given text using the best available local system voice.
@@ -38,7 +89,7 @@ final class AppleTTSClient: NSObject, AVSpeechSynthesizerDelegate {
 
         let speechUtterance = AVSpeechUtterance(string: trimmedText)
         speechUtterance.voice = selectBestSpeechVoice()
-        speechUtterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        speechUtterance.rate = min(1.0, max(0.1, AVSpeechUtteranceDefaultSpeechRate * Float(speechRateMultiplier)))
         speechUtterance.pitchMultiplier = 1.0
         speechUtterance.volume = 1.0
 
@@ -53,6 +104,11 @@ final class AppleTTSClient: NSObject, AVSpeechSynthesizerDelegate {
             speechSynthesizer.stopSpeaking(at: .immediate)
         }
         isCurrentlySpeaking = false
+        onFirstAudioStartedForCurrentSession = nil
+        hasCurrentSessionStartedAudio = false
+        let finishCallback = onPlaybackFinishedForCurrentSession
+        onPlaybackFinishedForCurrentSession = nil
+        finishCallback?()
     }
 
     // MARK: - Voice Selection
@@ -115,18 +171,32 @@ final class AppleTTSClient: NSObject, AVSpeechSynthesizerDelegate {
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
         Task { @MainActor in
             self.isCurrentlySpeaking = true
+            if !self.hasCurrentSessionStartedAudio {
+                self.hasCurrentSessionStartedAudio = true
+                self.onFirstAudioStartedForCurrentSession?()
+            }
         }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in
-            self.isCurrentlySpeaking = false
+            self.isCurrentlySpeaking = synthesizer.isSpeaking
+            if !synthesizer.isSpeaking {
+                let finishCallback = self.onPlaybackFinishedForCurrentSession
+                self.onPlaybackFinishedForCurrentSession = nil
+                finishCallback?()
+            }
         }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         Task { @MainActor in
-            self.isCurrentlySpeaking = false
+            self.isCurrentlySpeaking = synthesizer.isSpeaking
+            if !synthesizer.isSpeaking {
+                let finishCallback = self.onPlaybackFinishedForCurrentSession
+                self.onPlaybackFinishedForCurrentSession = nil
+                finishCallback?()
+            }
         }
     }
 }

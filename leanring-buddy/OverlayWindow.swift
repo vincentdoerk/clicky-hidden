@@ -170,10 +170,6 @@ struct BlueCursorView: View {
     /// Whether the target element highlight overlay is visible.
     @State private var showTargetHighlight: Bool = false
 
-    // MARK: - Onboarding Video Layout
-
-    private let onboardingVideoPlayerWidth: CGFloat = 330
-    private let onboardingVideoPlayerHeight: CGFloat = 186
 
     private let fullWelcomeMessage = "hey! i'm clicky"
 
@@ -219,21 +215,6 @@ struct BlueCursorView: View {
                     }
             }
 
-            // Onboarding video — always in the view tree so opacity animation works
-            // reliably. When no player exists or opacity is 0, nothing is visible.
-            // allowsHitTesting(false) prevents it from intercepting clicks.
-            OnboardingVideoPlayerView(player: companionManager.onboardingVideoPlayer)
-                .frame(width: onboardingVideoPlayerWidth, height: onboardingVideoPlayerHeight)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .shadow(color: Color.black.opacity(0.4 * companionManager.onboardingVideoOpacity), radius: 12, x: 0, y: 6)
-                .opacity(isCursorOnThisScreen ? companionManager.onboardingVideoOpacity : 0)
-                .position(
-                    x: cursorPosition.x + 10 + (onboardingVideoPlayerWidth / 2),
-                    y: cursorPosition.y + 18 + (onboardingVideoPlayerHeight / 2)
-                )
-                .animation(.spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0), value: cursorPosition)
-                .animation(.easeInOut(duration: 2.0), value: companionManager.onboardingVideoOpacity)
-                .allowsHitTesting(false)
 
             // Onboarding prompt — "press control + option and say hi" streamed after video ends
             if isCursorOnThisScreen && companionManager.showOnboardingPrompt && !companionManager.onboardingPromptText.isEmpty {
@@ -348,7 +329,13 @@ struct BlueCursorView: View {
                 .rotationEffect(.degrees(triangleRotationDegrees))
                 .shadow(color: DS.Colors.overlayCursorBlue, radius: 8 + (buddyFlightScale - 1.0) * 20, x: 0, y: 0)
                 .scaleEffect(buddyFlightScale)
-                .opacity(buddyIsVisibleOnThisScreen && (companionManager.voiceState == .idle || companionManager.voiceState == .responding) ? cursorOpacity : 0)
+                .opacity(
+                    buddyIsVisibleOnThisScreen && (
+                        buddyNavigationMode != .followingCursor ||
+                        companionManager.voiceState == .idle ||
+                        companionManager.voiceState == .responding
+                    ) ? cursorOpacity : 0
+                )
                 .position(cursorPosition)
                 .animation(
                     buddyNavigationMode == .followingCursor
@@ -364,17 +351,26 @@ struct BlueCursorView: View {
 
             // Blue waveform — replaces the triangle while listening
             BlueCursorWaveformView(audioPowerLevel: companionManager.currentAudioPowerLevel)
-                .opacity(buddyIsVisibleOnThisScreen && companionManager.voiceState == .listening ? cursorOpacity : 0)
+                .opacity(
+                    buddyIsVisibleOnThisScreen &&
+                    buddyNavigationMode == .followingCursor &&
+                    companionManager.voiceState == .listening ? cursorOpacity : 0
+                )
                 .position(cursorPosition)
                 .animation(.spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0), value: cursorPosition)
                 .animation(.easeIn(duration: 0.15), value: companionManager.voiceState)
 
             // Blue spinner — shown while the AI is processing (transcription + Claude + waiting for TTS)
-            BlueCursorSpinnerView()
-                .opacity(buddyIsVisibleOnThisScreen && companionManager.voiceState == .processing ? cursorOpacity : 0)
+            BlueCursorSpinnerView(statusText: companionManager.processingStepText)
+                .opacity(
+                    buddyIsVisibleOnThisScreen &&
+                    buddyNavigationMode == .followingCursor &&
+                    companionManager.voiceState == .processing ? cursorOpacity : 0
+                )
                 .position(cursorPosition)
                 .animation(.spring(response: 0.2, dampingFraction: 0.6, blendDuration: 0), value: cursorPosition)
                 .animation(.easeIn(duration: 0.15), value: companionManager.voiceState)
+                .animation(.easeInOut(duration: 0.2), value: companionManager.processingStepText)
 
         }
         .frame(width: screenFrame.width, height: screenFrame.height)
@@ -406,21 +402,24 @@ struct BlueCursorView: View {
         .onDisappear {
             timer?.invalidate()
             navigationAnimationTimer?.invalidate()
-            companionManager.tearDownOnboardingVideo()
         }
         .onChange(of: companionManager.detectedElementScreenLocation) { newLocation in
             // When a UI element location is detected, navigate the buddy to
             // that position so it points at the element.
-            guard let screenLocation = newLocation,
-                  let displayFrame = companionManager.detectedElementDisplayFrame else {
-                return
+            guard let screenLocation = newLocation else { return }
+
+            // Check if target is on THIS screen
+            let isTargetOnThisScreen: Bool
+            if let displayFrame = companionManager.detectedElementDisplayFrame {
+                isTargetOnThisScreen = NSScreen.screens.count <= 1
+                    || screenFrame.contains(CGPoint(x: displayFrame.midX, y: displayFrame.midY))
+                    || displayFrame == screenFrame
+                    || screenFrame.intersects(displayFrame)
+            } else {
+                isTargetOnThisScreen = isCursorOnThisScreen || NSScreen.screens.count <= 1
             }
 
-            // Only navigate if the target is on THIS screen
-            guard screenFrame.contains(CGPoint(x: displayFrame.midX, y: displayFrame.midY))
-                  || displayFrame == screenFrame else {
-                return
-            }
+            guard isTargetOnThisScreen else { return }
 
             startNavigatingToElement(screenLocation: screenLocation)
         }
@@ -435,10 +434,16 @@ struct BlueCursorView: View {
     private var buddyIsVisibleOnThisScreen: Bool {
         switch buddyNavigationMode {
         case .followingCursor:
-            // If another screen's BlueCursorView is navigating to an element,
-            // hide the cursor on this screen to prevent a duplicate buddy
-            if companionManager.detectedElementScreenLocation != nil {
-                return false
+            // If another screen is the target for element pointing, hide the cursor on THIS screen.
+            // On the target screen itself (or single display setups), keep it visible!
+            if let displayFrame = companionManager.detectedElementDisplayFrame {
+                let isTargetOnThisScreen = NSScreen.screens.count <= 1
+                    || screenFrame.contains(CGPoint(x: displayFrame.midX, y: displayFrame.midY))
+                    || displayFrame == screenFrame
+                    || screenFrame.intersects(displayFrame)
+                if !isTargetOnThisScreen {
+                    return false
+                }
             }
             return isCursorOnThisScreen
         case .navigatingToTarget, .pointingAtTarget:
@@ -854,6 +859,7 @@ struct BlueCursorView: View {
         navigationBubbleText = ""
         navigationBubbleOpacity = 0.0
         navigationBubbleScale = 1.0
+        cursorOpacity = 1.0
         companionManager.clearDetectedElementLocation()
     }
 
@@ -874,8 +880,6 @@ struct BlueCursorView: View {
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                     self.showWelcome = false
-                    // Start the onboarding video right after the welcome text disappears
-                    self.companionManager.setupOnboardingVideo()
                 }
                 return
             }
@@ -929,32 +933,50 @@ private struct BlueCursorWaveformView: View {
 
 // MARK: - Blue Cursor Spinner
 
-/// A small blue spinning indicator that replaces the triangle cursor
-/// while the AI is processing a voice input.
+/// A small blue spinning indicator with an optional status label that replaces
+/// the triangle cursor while the AI is processing a voice input.
 private struct BlueCursorSpinnerView: View {
+    let statusText: String
     @State private var isSpinning = false
 
     var body: some View {
-        Circle()
-            .trim(from: 0.15, to: 0.85)
-            .stroke(
-                AngularGradient(
-                    colors: [
-                        DS.Colors.overlayCursorBlue.opacity(0.0),
-                        DS.Colors.overlayCursorBlue
-                    ],
-                    center: .center
-                ),
-                style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
-            )
-            .frame(width: 14, height: 14)
-            .rotationEffect(.degrees(isSpinning ? 360 : 0))
-            .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.6), radius: 6, x: 0, y: 0)
-            .onAppear {
-                withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
-                    isSpinning = true
+        HStack(spacing: 8) {
+            Circle()
+                .trim(from: 0.15, to: 0.85)
+                .stroke(
+                    AngularGradient(
+                        colors: [
+                            DS.Colors.overlayCursorBlue.opacity(0.0),
+                            DS.Colors.overlayCursorBlue
+                        ],
+                        center: .center
+                    ),
+                    style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
+                )
+                .frame(width: 14, height: 14)
+                .rotationEffect(.degrees(isSpinning ? 360 : 0))
+                .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.6), radius: 6, x: 0, y: 0)
+                .onAppear {
+                    withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
+                        isSpinning = true
+                    }
                 }
+
+            if !statusText.isEmpty {
+                Text(statusText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(DS.Colors.overlayCursorBlue.opacity(0.92))
+                            .shadow(color: DS.Colors.overlayCursorBlue.opacity(0.5), radius: 6, x: 0, y: 0)
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
+        }
     }
 }
 
@@ -986,6 +1008,7 @@ class OverlayWindowManager {
             let hostingView = NSHostingView(rootView: contentView)
             hostingView.frame = screen.frame
             window.contentView = hostingView
+            window.alphaValue = 1.0
 
             overlayWindows.append(window)
             window.orderFrontRegardless()
@@ -1021,46 +1044,5 @@ class OverlayWindowManager {
 
     func isShowingOverlay() -> Bool {
         return !overlayWindows.isEmpty
-    }
-}
-
-// MARK: - Onboarding Video Player
-
-/// NSViewRepresentable wrapping an AVPlayerLayer so HLS video plays
-/// inside SwiftUI. Uses a custom NSView subclass to keep the player
-/// layer sized to the view's bounds automatically.
-private struct OnboardingVideoPlayerView: NSViewRepresentable {
-    let player: AVPlayer?
-
-    func makeNSView(context: Context) -> AVPlayerNSView {
-        let view = AVPlayerNSView()
-        view.player = player
-        return view
-    }
-
-    func updateNSView(_ nsView: AVPlayerNSView, context: Context) {
-        nsView.player = player
-    }
-}
-
-private class AVPlayerNSView: NSView {
-    var player: AVPlayer? {
-        didSet { playerLayer.player = player }
-    }
-
-    private let playerLayer = AVPlayerLayer()
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        playerLayer.videoGravity = .resizeAspectFill
-        layer?.addSublayer(playerLayer)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func layout() {
-        super.layout()
-        playerLayer.frame = bounds
     }
 }

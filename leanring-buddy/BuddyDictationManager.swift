@@ -597,12 +597,12 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         audioEngine.inputNode.removeTap(onBus: 0)
         activeTranscriptionSession?.cancel()
 
+        let hasFinalDraftToSubmit = shouldSubmitFinalDraft && !finalTranscriptText.isEmpty
+        if hasFinalDraftToSubmit {
+            currentDraftCallbacks?.submitDraftText(finalDraftText)
+        }
+
         resetSessionState()
-
-        guard shouldSubmitFinalDraft else { return }
-        guard !finalTranscriptText.isEmpty else { return }
-
-        currentDraftCallbacks?.submitDraftText(finalDraftText)
     }
 
     private func composeDraftText(withTranscribedText transcribedText: String) -> String {

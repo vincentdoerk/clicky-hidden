@@ -44,13 +44,163 @@ final class CompanionManager: ObservableObject {
     /// Bounding box size (in display points) of the detected UI element for the highlight overlay.
     @Published var detectedElementHighlightSize: CGSize?
 
-    // MARK: - Onboarding Video State (shared across all screen overlays)
+    /// Human-readable status description for the current processing pipeline step
+    /// (e.g. "Audio verarbeiten...", "Bildschirm analysieren...").
+    @Published private(set) var processingStepText: String = ""
 
-    @Published var onboardingVideoPlayer: AVPlayer?
-    @Published var showOnboardingVideo: Bool = false
-    @Published var onboardingVideoOpacity: Double = 0.0
-    private var onboardingVideoEndObserver: NSObjectProtocol?
-    private var onboardingDemoTimeObserver: Any?
+    func setProcessingStepText(_ text: String) {
+        self.processingStepText = text
+    }
+
+    // MARK: - TTS Model & Voice Selection State
+
+    /// The unique identifier of the currently selected TTS model.
+    @Published var selectedTTSModelId: String = {
+        let persistedId = UserDefaults.standard.string(forKey: "selectedTTSModelId")
+            ?? TTSModelCatalog.defaultModelId
+        return persistedId
+    }()
+
+    /// The currently selected spoken language code (e.g. "German", "en").
+    @Published var selectedTTSLanguageCode: String = {
+        let persistedCode = UserDefaults.standard.string(forKey: "selectedTTSLanguageCode")
+        if let persistedCode = persistedCode, !persistedCode.isEmpty {
+            return persistedCode
+        }
+        let initialModel = TTSModelCatalog.model(withId: UserDefaults.standard.string(forKey: "selectedTTSModelId") ?? TTSModelCatalog.defaultModelId)
+        return initialModel.defaultLanguageCode
+    }()
+
+    /// All available TTS models in the catalog.
+    var availableTTSModels: [TTSModelOption] {
+        return TTSModelCatalog.allModels
+    }
+
+    /// The active TTS model option.
+    var currentTTSModel: TTSModelOption {
+        return TTSModelCatalog.model(withId: selectedTTSModelId)
+    }
+
+    /// Supported languages for the active TTS model.
+    var availableLanguagesForCurrentModel: [TTSLanguageOption] {
+        return currentTTSModel.supportedLanguages
+    }
+
+    /// Supported preset voices for the active TTS model.
+    var availableVoices: [String] {
+        return currentTTSModel.availableVoices
+    }
+
+    /// The currently selected speech voice timbre. Persisted to UserDefaults.
+    @Published var selectedVoice: String = {
+        let persistedVoice = UserDefaults.standard.string(forKey: "selectedTTSVoice")
+        let activeModel = TTSModelCatalog.model(withId: UserDefaults.standard.string(forKey: "selectedTTSModelId") ?? TTSModelCatalog.defaultModelId)
+        if let persistedVoice = persistedVoice, activeModel.availableVoices.contains(persistedVoice) {
+            return persistedVoice
+        }
+        return activeModel.defaultVoice
+    }()
+
+    /// Whether a sample voice preview is currently being spoken.
+    @Published var isPlayingVoicePreview: Bool = false
+
+    func setSelectedTTSModel(_ modelId: String) {
+        selectedTTSModelId = modelId
+        UserDefaults.standard.set(modelId, forKey: "selectedTTSModelId")
+
+        let modelOption = TTSModelCatalog.model(withId: modelId)
+        textToSpeechProvider.setModelName(modelOption.modelRepo ?? "")
+
+        // Verify and update language if current language is not supported
+        let supportsCurrentLanguage = modelOption.supportedLanguages.contains { $0.code == selectedTTSLanguageCode }
+        if !supportsCurrentLanguage {
+            setSelectedTTSLanguage(modelOption.defaultLanguageCode)
+        } else {
+            textToSpeechProvider.setLanguageCode(selectedTTSLanguageCode)
+        }
+
+        // Verify and update voice if current voice is not in the new model's voice list
+        if !modelOption.availableVoices.contains(selectedVoice) {
+            setSelectedVoice(modelOption.defaultVoice)
+        } else {
+            textToSpeechProvider.setVoiceName(selectedVoice)
+        }
+        print("🔊 Text-to-speech: model switched to '\(modelOption.displayName)'")
+    }
+
+    func setSelectedTTSLanguage(_ languageCode: String) {
+        selectedTTSLanguageCode = languageCode
+        UserDefaults.standard.set(languageCode, forKey: "selectedTTSLanguageCode")
+        textToSpeechProvider.setLanguageCode(languageCode)
+        print("🔊 Text-to-speech: language switched to '\(languageCode)'")
+    }
+
+    func setSelectedVoice(_ voiceName: String) {
+        selectedVoice = voiceName
+        UserDefaults.standard.set(voiceName, forKey: "selectedTTSVoice")
+        textToSpeechProvider.setVoiceName(voiceName)
+        print("🔊 Text-to-speech: voice switched to '\(voiceName)'")
+    }
+
+    /// Plays a short sample phrase to preview the given voice (or currently selected voice).
+    func playVoicePreview(for voiceName: String? = nil) {
+        if isPlayingVoicePreview {
+            stopVoicePreview()
+        }
+
+        let voiceToPreview = voiceName ?? selectedVoice
+        textToSpeechProvider.setVoiceName(voiceToPreview)
+        textToSpeechProvider.setModelName(currentTTSModel.modelRepo ?? "")
+        textToSpeechProvider.setLanguageCode(selectedTTSLanguageCode)
+        isPlayingVoicePreview = true
+
+        let cleanVoiceName = voiceToPreview.replacingOccurrences(of: "_", with: " ")
+        let samplePreviewText: String
+        if selectedTTSLanguageCode.lowercased().contains("en") || selectedTTSLanguageCode.lowercased() == "a" || selectedTTSLanguageCode.lowercased() == "b" {
+            samplePreviewText = "Hello! My name is \(cleanVoiceName), and this is how I sound on your Mac."
+        } else if selectedTTSLanguageCode.lowercased().contains("fr") {
+            samplePreviewText = "Bonjour! Je m'appelle \(cleanVoiceName), et voici ma voix sur votre Mac."
+        } else if selectedTTSLanguageCode.lowercased().contains("es") {
+            samplePreviewText = "¡Hola! Mi nombre es \(cleanVoiceName), y así es como sueno en tu Mac."
+        } else {
+            samplePreviewText = "Hallo! Mein Name ist \(cleanVoiceName), und so klinge ich auf deinem Mac."
+        }
+
+        textToSpeechProvider.speakCompleteText(
+            samplePreviewText,
+            onFirstAudioStarted: {
+                // Audio started playing
+            },
+            onPlaybackFinished: { [weak self] in
+                Task { @MainActor in
+                    self?.isPlayingVoicePreview = false
+                }
+            }
+        )
+    }
+
+    /// Stops any ongoing voice preview playback.
+    func stopVoicePreview() {
+        textToSpeechProvider.stopPlayback()
+        isPlayingVoicePreview = false
+    }
+
+    // MARK: - Speech Rate State
+
+    /// The playback rate multiplier for spoken audio (1.0 = normal, 1.25 = 25% faster).
+    @Published var speechRateMultiplier: Double = {
+        let persistedRate = UserDefaults.standard.double(forKey: "selectedTTSSpeechRate")
+        return persistedRate > 0.1 ? persistedRate : 1.0
+    }()
+
+    /// Available speech rate multiplier options for the panel picker.
+    let availableSpeechRates: [Double] = [0.85, 1.0, 1.1, 1.2, 1.25, 1.4, 1.5]
+
+    func setSpeechRateMultiplier(_ rateMultiplier: Double) {
+        speechRateMultiplier = rateMultiplier
+        UserDefaults.standard.set(rateMultiplier, forKey: "selectedTTSSpeechRate")
+        textToSpeechProvider.setSpeechRateMultiplier(rateMultiplier)
+    }
 
     // MARK: - Onboarding Prompt Bubble
 
@@ -74,8 +224,8 @@ final class CompanionManager: ObservableObject {
         return OllamaAPI(selectedModelName: selectedModel)
     }()
 
-    private lazy var appleTTSClient: AppleTTSClient = {
-        return AppleTTSClient()
+    private lazy var textToSpeechProvider: any TextToSpeechProvider = {
+        return TextToSpeechProviderFactory.makeDefaultProvider()
     }()
 
     /// Conversation history so Ollama remembers prior exchanges within a session.
@@ -142,7 +292,7 @@ final class CompanionManager: ObservableObject {
     /// When toggled off, the overlay is hidden and push-to-talk is disabled.
     /// Persisted to UserDefaults so the choice survives app restarts.
     @Published var isClickyCursorEnabled: Bool = UserDefaults.standard.object(forKey: "isClickyCursorEnabled") == nil
-        ? true
+        ? false
         : UserDefaults.standard.bool(forKey: "isClickyCursorEnabled")
 
     func setClickyCursorEnabled(_ enabled: Bool) {
@@ -205,6 +355,8 @@ final class CompanionManager: ObservableObject {
         Task {
             await refreshAvailableVisionModels()
         }
+        textToSpeechProvider.prepare()
+        textToSpeechProvider.setSpeechRateMultiplier(speechRateMultiplier)
 
         // If the user already completed onboarding AND all permissions are
         // still granted, show the cursor overlay immediately. If permissions
@@ -236,19 +388,6 @@ final class CompanionManager: ObservableObject {
 
         // Show the overlay for the first time — isFirstAppearance triggers
         // the welcome animation and onboarding video
-        overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
-        isOverlayVisible = true
-    }
-
-    /// Replays the onboarding experience from the "Watch Onboarding Again"
-    /// footer link. Same flow as triggerOnboarding but the cursor overlay
-    /// is already visible so we just restart the welcome animation and video.
-    func replayOnboarding() {
-        NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
-        ClickyAnalytics.trackOnboardingReplayed()
-        startOnboardingMusic()
-        // Tear down any existing overlays and recreate with isFirstAppearance = true
-        overlayWindowManager.hasShownOverlayBefore = false
         overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
         isOverlayVisible = true
     }
@@ -309,6 +448,10 @@ final class CompanionManager: ObservableObject {
         detectedElementHighlightSize = nil
         detectedElementDisplayFrame = nil
         detectedElementBubbleText = nil
+        if !textToSpeechProvider.isPlaying {
+            voiceState = .idle
+            scheduleTransientHideIfNeeded()
+        }
     }
 
     func stop() {
@@ -324,6 +467,7 @@ final class CompanionManager: ObservableObject {
         audioPowerCancellable?.cancel()
         accessibilityCheckTimer?.invalidate()
         accessibilityCheckTimer = nil
+        textToSpeechProvider.shutdown()
     }
 
     func refreshAllPermissions() {
@@ -466,19 +610,20 @@ final class CompanionManager: ObservableObject {
 
                 if isFinalizing {
                     self.voiceState = .processing
+                    if self.processingStepText.isEmpty {
+                        self.processingStepText = "Audio verarbeiten..."
+                    }
                 } else if isRecording {
                     self.voiceState = .listening
+                    self.processingStepText = ""
                 } else if isPreparing {
                     self.voiceState = .processing
+                    self.processingStepText = "Mikrofon vorbereiten..."
                 } else {
-                    self.voiceState = .idle
-                    // If the user pressed and released the hotkey without
-                    // saying anything, no response task runs — schedule the
-                    // transient hide here so the overlay doesn't get stuck.
-                    // Only do this when no response is in flight, otherwise
-                    // the brief idle gap between recording and processing
-                    // would prematurely hide the overlay.
+                    // If no response task is active, check whether dictation was not in progress
                     if self.currentResponseTask == nil {
+                        self.voiceState = .idle
+                        self.processingStepText = ""
                         self.scheduleTransientHideIfNeeded()
                     }
                 }
@@ -498,8 +643,6 @@ final class CompanionManager: ObservableObject {
         switch transition {
         case .pressed:
             guard !buddyDictationManager.isDictationInProgress else { return }
-            // Don't register push-to-talk while the onboarding video is playing
-            guard !showOnboardingVideo else { return }
 
             // Cancel any pending transient hide so the overlay stays visible
             transientHideTask?.cancel()
@@ -515,9 +658,9 @@ final class CompanionManager: ObservableObject {
             // Dismiss the menu bar panel so it doesn't cover the screen
             NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
 
-            // Cancel any in-progress response and TTS from a previous utterance
+            // Cancel any in-progress response, TTS, or voice preview from a previous utterance
             currentResponseTask?.cancel()
-            appleTTSClient.stopPlayback()
+            stopVoicePreview()
             clearDetectedElementLocation()
 
             // Dismiss the onboarding prompt if it's showing
@@ -564,6 +707,13 @@ final class CompanionManager: ObservableObject {
             ClickyAnalytics.trackPushToTalkReleased()
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
+
+            // Keep the cursor visible in processing state while audio finishes transcribing
+            transientHideTask?.cancel()
+            transientHideTask = nil
+            voiceState = .processing
+            processingStepText = "Audio verarbeiten..."
+
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
         case .none:
             break
@@ -629,11 +779,16 @@ final class CompanionManager: ObservableObject {
     /// the buddy to fly to that element on screen.
     private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
-        appleTTSClient.stopPlayback()
+        textToSpeechProvider.stopPlayback()
+
+        // Cancel any pending transient hide so the overlay stays visible throughout this response
+        transientHideTask?.cancel()
+        transientHideTask = nil
 
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
             voiceState = .processing
+            processingStepText = "Bildschirm erfassen..."
 
             do {
                 // Use screens pre-captured at hotkey press, or capture now if not yet available
@@ -646,6 +801,8 @@ final class CompanionManager: ObservableObject {
                 precapturedScreensTask = nil
 
                 guard !Task.isCancelled else { return }
+
+                processingStepText = "Bild analysieren..."
 
                 // Build image labels with the actual screenshot pixel dimensions
                 // so the AI coordinate space matches the image it sees. We
@@ -660,29 +817,71 @@ final class CompanionManager: ObservableObject {
                     (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
                 }
 
+                // Start speech session before the LLM begins streaming text so sentences
+                // can be enqueued and synthesized concurrently in real time.
+                let sentenceSegmenter = SpeechSentenceSegmenter()
+                textToSpeechProvider.beginSpeechSession(
+                    onFirstAudioStarted: { [weak self] in
+                        guard let self = self else { return }
+                        // Only transition to responding if not pointing to an element
+                        if self.detectedElementScreenLocation == nil {
+                            self.voiceState = .responding
+                            self.processingStepText = ""
+                        }
+                    },
+                    onPlaybackFinished: { [weak self] in
+                        guard let self = self else { return }
+                        // If pointing is already finished or there was no pointing,
+                        // transition to idle and start the 5-second transient hide timer.
+                        if self.detectedElementScreenLocation == nil {
+                            self.voiceState = .idle
+                            self.processingStepText = ""
+                            self.scheduleTransientHideIfNeeded()
+                        }
+                    }
+                )
+
                 let (fullResponseText, _) = try await ollamaAPI.analyzeImageStreaming(
                     images: labeledImages,
                     systemPrompt: Self.companionVoiceResponseSystemPrompt,
                     conversationHistory: historyForAPI,
                     userPrompt: transcript,
-                    onTextChunk: { _ in
-                        // No streaming text display — spinner stays until TTS plays
+                    onTextChunk: { [weak self] currentAccumulatedText in
+                        guard let self = self else { return }
+                        if self.processingStepText != "Antwort generieren..." && self.voiceState == .processing {
+                            self.processingStepText = "Antwort generieren..."
+                        }
+                        let newSentences = sentenceSegmenter.appendAccumulatedResponseText(currentAccumulatedText)
+                        for sentence in newSentences {
+                            self.textToSpeechProvider.enqueueSentenceForSpeech(sentence)
+                        }
                     }
                 )
 
                 guard !Task.isCancelled else { return }
 
-                // Parse the [POINT:...] tag from Claude's response
+                // Enqueue any final remaining sentences and close the speech session
+                let remainingSentences = sentenceSegmenter.flushRemainingSentences()
+                for remainingSentence in remainingSentences {
+                    textToSpeechProvider.enqueueSentenceForSpeech(remainingSentence)
+                }
+                textToSpeechProvider.finishSpeechSession()
+
+                // Parse the [POINT:...] tag from the model's response
                 let parseResult = Self.parsePointingCoordinates(from: fullResponseText)
                 let spokenText = parseResult.spokenText
 
-                // Handle element pointing if Claude returned coordinates.
+                // Handle element pointing if coordinates were returned.
                 // Switch to idle BEFORE setting the location so the triangle
                 // becomes visible and can fly to the target. Without this, the
                 // spinner hides the triangle and the flight animation is invisible.
                 let hasPointCoordinate = parseResult.coordinate != nil
                 if hasPointCoordinate {
                     voiceState = .idle
+                    processingStepText = ""
+                } else if textToSpeechProvider.hasCurrentSessionStartedAudio {
+                    voiceState = .responding
+                    processingStepText = ""
                 }
 
                 // Pick the screen capture matching Claude's screen number,
@@ -750,7 +949,7 @@ final class CompanionManager: ObservableObject {
                     // High-precision OCR text snapping via Apple Vision framework:
                     // If the user's query refers to a text button, menu item, or playlist,
                     // snap the coordinate and bounding box to the exact text element!
-                    let candidateKeywords = Self.buildCandidateKeywords(label: parseResult.elementLabel, transcript: transcript)
+                    let candidateKeywords = Self.buildCandidateKeywords(label: parseResult.elementLabel)
                     if let snappedMatch = CompanionScreenCaptureUtility.snapToMatchingTextElement(
                         primaryTargetLabel: parseResult.elementLabel,
                         candidateKeywords: candidateKeywords,
@@ -764,8 +963,8 @@ final class CompanionManager: ObservableObject {
 
                     detectedElementHighlightSize = CGSize(width: finalHighlightWidth, height: finalHighlightHeight)
                     detectedElementBubbleText = parseResult.elementLabel
-                    detectedElementScreenLocation = finalGlobalLocation
                     detectedElementDisplayFrame = displayFrame
+                    detectedElementScreenLocation = finalGlobalLocation
                     ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
 
                     let screenIndexDescription = parseResult.screenNumber.map { "screen \($0)" } ?? "cursor screen"
@@ -789,38 +988,37 @@ final class CompanionManager: ObservableObject {
                 print("🧠 Conversation history: \(conversationHistory.count) exchanges")
 
                 ClickyAnalytics.trackAIResponseReceived(response: spokenText)
-
-                // Play the response via TTS. Keep the spinner (processing state)
-                // until the audio actually starts playing, then switch to responding.
-                if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    do {
-                        try await appleTTSClient.speakText(spokenText)
-                        // speakText returns after playback starts
-                        voiceState = .responding
-                    } catch {
-                        ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                        print("⚠️ Apple TTS error: \(error)")
-                        speakLocalErrorFallback(errorMessage: "Sorry, I had trouble speaking the response.")
-                    }
-                }
             } catch is CancellationError {
                 // User spoke again — response was interrupted
+                textToSpeechProvider.stopPlayback()
+                processingStepText = ""
             } catch {
+                textToSpeechProvider.stopPlayback()
+                processingStepText = ""
                 ClickyAnalytics.trackResponseError(error: error.localizedDescription)
                 print("⚠️ Companion response error: \(error)")
                 speakLocalErrorFallback(errorMessage: "Ollama is not running or encountered an error. Please make sure Ollama is running.")
             }
 
             if !Task.isCancelled {
-                voiceState = .idle
-                scheduleTransientHideIfNeeded()
+                // If neither pointing nor TTS is active, switch to idle and schedule hide.
+                // Otherwise, the active process (pointing landing or TTS finish) will trigger it.
+                if detectedElementScreenLocation == nil && !textToSpeechProvider.isPlaying {
+                    voiceState = .idle
+                    processingStepText = ""
+                    scheduleTransientHideIfNeeded()
+                } else if detectedElementScreenLocation == nil && textToSpeechProvider.isPlaying {
+                    voiceState = .responding
+                    processingStepText = ""
+                }
             }
+            currentResponseTask = nil
         }
     }
 
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),
     /// waits for TTS playback and any pointing animation to finish, then
-    /// fades out the overlay after a 1-second pause. Cancelled automatically
+    /// fades out the overlay after a 5-second pause. Cancelled automatically
     /// if the user starts another push-to-talk interaction.
     private func scheduleTransientHideIfNeeded() {
         guard !isClickyCursorEnabled && isOverlayVisible else { return }
@@ -828,7 +1026,7 @@ final class CompanionManager: ObservableObject {
         transientHideTask?.cancel()
         transientHideTask = Task {
             // Wait for TTS audio to finish playing
-            while appleTTSClient.isPlaying {
+            while textToSpeechProvider.isPlaying {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
             }
@@ -840,8 +1038,9 @@ final class CompanionManager: ObservableObject {
                 guard !Task.isCancelled else { return }
             }
 
-            // Pause 1s after everything finishes, then fade out
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            // Pause 5 seconds after everything finishes (returning to cursor and speaking),
+            // then smoothly fade out.
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
             overlayWindowManager.fadeOutAndHideOverlay()
             isOverlayVisible = false
@@ -962,103 +1161,27 @@ final class CompanionManager: ObservableObject {
         )
     }
 
-    /// Extracts candidate keywords from the element label and transcript to search for via Apple Vision OCR.
-    private static func buildCandidateKeywords(label: String?, transcript: String) -> [String] {
+    /// Extracts candidate keywords from the element label to search for via Apple Vision OCR.
+    /// Stray words from the user's transcript are excluded so unrelated text on screen
+    /// (e.g. application names like "Xcode" in the menu bar) cannot hijack pointing away from the target element.
+    private static func buildCandidateKeywords(label: String?) -> [String] {
         var candidates: [String] = []
 
-        if let label = label, !label.isEmpty && label.lowercased() != "none" {
-            candidates.append(label)
-            let words = label.components(separatedBy: CharacterSet.alphanumerics.inverted)
-                .filter { $0.count >= 3 }
-            candidates.append(contentsOf: words)
+        guard let label = label?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !label.isEmpty,
+              label.lowercased() != "none" else {
+            return []
         }
 
-        let stopWords: Set<String> = [
-            "wo", "finde", "ich", "den", "die", "das", "der", "ein", "eine",
-            "button", "symbol", "icon", "bitte", "kannst", "du", "mir", "zeigen",
-            "nochmal", "anzeigen", "klicken", "klicke", "auf", "hier", "ist",
-            "where", "is", "the", "how", "to", "click", "show", "me", "again"
-        ]
-
-        let transcriptWords = transcript.components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count >= 3 && !stopWords.contains($0.lowercased()) }
-
-        candidates.append(contentsOf: transcriptWords)
+        candidates.append(label)
+        let words = label.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { $0.count >= 2 }
+        candidates.append(contentsOf: words)
 
         var seen = Set<String>()
         return candidates.filter { seen.insert($0.lowercased()).inserted }
     }
 
-    // MARK: - Onboarding Video
-
-    /// Sets up the onboarding video player, starts playback, and schedules
-    /// the demo interaction at 40s. Called by BlueCursorView when onboarding starts.
-    func setupOnboardingVideo() {
-        guard let videoURL = URL(string: "https://stream.mux.com/e5jB8UuSrtFABVnTHCR7k3sIsmcUHCyhtLu1tzqLlfs.m3u8") else { return }
-
-        let player = AVPlayer(url: videoURL)
-        player.isMuted = false
-        player.volume = 0.0
-        self.onboardingVideoPlayer = player
-        self.showOnboardingVideo = true
-        self.onboardingVideoOpacity = 0.0
-
-        // Start playback immediately — the video plays while invisible,
-        // then we fade in both the visual and audio over 1s.
-        player.play()
-
-        // Wait for SwiftUI to mount the view, then set opacity to 1.
-        // The .animation modifier on the view handles the actual animation.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            self.onboardingVideoOpacity = 1.0
-            // Fade audio volume from 0 → 1 over 2s to match visual fade
-            self.fadeInVideoAudio(player: player, targetVolume: 1.0, duration: 2.0)
-        }
-
-        // At 40 seconds into the video, trigger the onboarding demo where
-        // Clicky flies to something interesting on screen and comments on it
-        let demoTriggerTime = CMTime(seconds: 40, preferredTimescale: 600)
-        onboardingDemoTimeObserver = player.addBoundaryTimeObserver(
-            forTimes: [NSValue(time: demoTriggerTime)],
-            queue: .main
-        ) { [weak self] in
-            ClickyAnalytics.trackOnboardingDemoTriggered()
-            self?.performOnboardingDemoInteraction()
-        }
-
-        // Fade out and clean up when the video finishes
-        onboardingVideoEndObserver = NotificationCenter.default.addObserver(
-            forName: AVPlayerItem.didPlayToEndTimeNotification,
-            object: player.currentItem,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
-            ClickyAnalytics.trackOnboardingVideoCompleted()
-            self.onboardingVideoOpacity = 0.0
-            // Wait for the 2s fade-out animation to complete before tearing down
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                self.tearDownOnboardingVideo()
-                // After the video disappears, stream in the prompt to try talking
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    self.startOnboardingPromptStream()
-                }
-            }
-        }
-    }
-
-    func tearDownOnboardingVideo() {
-        showOnboardingVideo = false
-        if let timeObserver = onboardingDemoTimeObserver {
-            onboardingVideoPlayer?.removeTimeObserver(timeObserver)
-            onboardingDemoTimeObserver = nil
-        }
-        onboardingVideoPlayer?.pause()
-        onboardingVideoPlayer = nil
-        if let observer = onboardingVideoEndObserver {
-            NotificationCenter.default.removeObserver(observer)
-            onboardingVideoEndObserver = nil
-        }
-    }
 
     private func startOnboardingPromptStream() {
         let message = "press control + option and introduce yourself"
@@ -1090,25 +1213,6 @@ final class CompanionManager: ObservableObject {
             let index = message.index(message.startIndex, offsetBy: currentIndex)
             self.onboardingPromptText.append(message[index])
             currentIndex += 1
-        }
-    }
-
-    /// Gradually raises an AVPlayer's volume from its current level to the
-    /// target over the specified duration, creating a smooth audio fade-in.
-    private func fadeInVideoAudio(player: AVPlayer, targetVolume: Float, duration: Double) {
-        let steps = 20
-        let stepInterval = duration / Double(steps)
-        let volumeIncrement = (targetVolume - player.volume) / Float(steps)
-        var stepsRemaining = steps
-
-        Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { timer in
-            stepsRemaining -= 1
-            player.volume += volumeIncrement
-
-            if stepsRemaining <= 0 {
-                timer.invalidate()
-                player.volume = targetVolume
-            }
         }
     }
 

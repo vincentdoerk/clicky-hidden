@@ -98,15 +98,10 @@ enum CompanionScreenCaptureUtility {
             let filter = SCContentFilter(display: display, excludingWindows: ownAppWindows)
 
             let configuration = SCStreamConfiguration()
-            let maxDimension = 1920
-            let aspectRatio = CGFloat(display.width) / CGFloat(display.height)
-            if display.width >= display.height {
-                configuration.width = maxDimension
-                configuration.height = Int(CGFloat(maxDimension) / aspectRatio)
-            } else {
-                configuration.height = maxDimension
-                configuration.width = Int(CGFloat(maxDimension) * aspectRatio)
-            }
+            // Always capture at the display's native resolution (e.g. 2560x1440 for 2K displays)
+            // so pixel coordinates and Vision OCR text bounds match 1:1 with the actual monitor.
+            configuration.width = max(1, display.width)
+            configuration.height = max(1, display.height)
 
             let cgImage = try await SCScreenshotManager.captureImage(
                 contentFilter: filter,
@@ -280,6 +275,17 @@ enum CompanionScreenCaptureUtility {
             // Therefore, heavily penalize vertical distance compared to horizontal distance.
             let effectiveDistance = sqrt(pow(horizontalDistanceToBox * 0.5, 2) + pow(verticalDistanceToBox * 3.0, 2))
 
+            // Strictly enforce maximum snapping radius: OCR text snapping is strictly intended
+            // for local fine-tuning of an element the AI already pointed at. Any candidate further
+            // than 140 points horizontally or 70 points vertically belongs to a different UI region
+            // (e.g. menu bar or distant toolbars) and must NEVER hijack pointing!
+            guard horizontalDistanceToBox <= 140.0 && verticalDistanceToBox <= 70.0 else {
+                continue
+            }
+            guard effectiveDistance <= 120.0 else {
+                continue
+            }
+
             // Score match quality
             var textMatchScore: Double = 0.0
             var currentMatchType: String = "none"
@@ -330,8 +336,8 @@ enum CompanionScreenCaptureUtility {
                 }
             }
 
-            // 2. SECONDARY KEYWORD MATCHING
-            if textMatchScore < 3000.0 {
+            // 2. SECONDARY KEYWORD MATCHING (strictly local within 80pt)
+            if textMatchScore < 3000.0 && effectiveDistance <= 80.0 {
                 for keyword in cleanKeywords {
                     if keyword.isEmpty { continue }
                     if normalizedObserved == keyword {
@@ -362,8 +368,8 @@ enum CompanionScreenCaptureUtility {
                 }
             }
 
-            // Threshold: require at least a modest match
-            guard textMatchScore >= 1000.0 else { continue }
+            // Threshold: require at least a solid match to justify moving the cursor
+            guard textMatchScore >= 2000.0 else { continue }
 
             // Proximity bonus if vertically aligned with the target row
             var proximityScore: Double = -Double(effectiveDistance)
