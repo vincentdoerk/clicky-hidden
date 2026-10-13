@@ -14,6 +14,8 @@ struct CompanionScreenCapture {
     let imageData: Data
     let label: String
     let isCursorScreen: Bool
+    let cursorLocationOnScreen: CGPoint?
+    let globalCursorLocationAtCapture: CGPoint
     let displayWidthInPoints: Int
     let displayHeightInPoints: Int
     let displayFrame: CGRect
@@ -24,9 +26,8 @@ struct CompanionScreenCapture {
 @MainActor
 enum CompanionScreenCaptureUtility {
 
-    /// Captures all connected displays as JPEG data, labeling each with
-    /// whether the user's cursor is on that screen. This gives the AI
-    /// full context across multiple monitors.
+    /// Captures all connected displays as JPEG data in a deterministic left-to-right order,
+    /// recording the exact cursor location at the moment of capture.
     static func captureAllScreensAsJPEG() async throws -> [CompanionScreenCapture] {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 
@@ -35,7 +36,7 @@ enum CompanionScreenCaptureUtility {
                           userInfo: [NSLocalizedDescriptionKey: "No display available for capture"])
         }
 
-        let mouseLocation = NSEvent.mouseLocation
+        let mouseLocationAtCapture = NSEvent.mouseLocation
 
         // Exclude all windows belonging to this app so the AI sees
         // only the user's content, not our overlays or panels.
@@ -47,9 +48,7 @@ enum CompanionScreenCaptureUtility {
         // Build a lookup from display ID to NSScreen so we can use AppKit-coordinate
         // frames instead of CG-coordinate frames. NSEvent.mouseLocation and NSScreen.frame
         // both use AppKit coordinates (bottom-left origin), while SCDisplay.frame uses
-        // Core Graphics coordinates (top-left origin). On multi-display setups, the Y
-        // origins differ for secondary displays, which breaks cursor-contains checks
-        // and downstream coordinate conversions.
+        // Core Graphics coordinates (top-left origin).
         var nsScreenByDisplayID: [CGDirectDisplayID: NSScreen] = [:]
         for screen in NSScreen.screens {
             if let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
@@ -57,26 +56,35 @@ enum CompanionScreenCaptureUtility {
             }
         }
 
-        // Sort displays so the cursor screen is always first
+        // Deterministic sorting from left to right (origin.x) so screen 1 and screen 2
+        // maintain stable identities regardless of where the cursor moves.
         let sortedDisplays = content.displays.sorted { displayA, displayB in
             let frameA = nsScreenByDisplayID[displayA.displayID]?.frame ?? displayA.frame
             let frameB = nsScreenByDisplayID[displayB.displayID]?.frame ?? displayB.frame
-            let aContainsCursor = frameA.contains(mouseLocation)
-            let bContainsCursor = frameB.contains(mouseLocation)
-            if aContainsCursor != bContainsCursor { return aContainsCursor }
-            return false
+            if frameA.origin.x != frameB.origin.x {
+                return frameA.origin.x < frameB.origin.x
+            }
+            return frameA.origin.y < frameB.origin.y
         }
 
         var capturedScreens: [CompanionScreenCapture] = []
 
         for (displayIndex, display) in sortedDisplays.enumerated() {
             // Use NSScreen.frame (AppKit coordinates, bottom-left origin) so
-            // displayFrame is in the same coordinate system as NSEvent.mouseLocation
-            // and the overlay window's screenFrame in BlueCursorView.
+            // displayFrame is in the same coordinate system as NSEvent.mouseLocation.
             let displayFrame = nsScreenByDisplayID[display.displayID]?.frame
                 ?? CGRect(x: display.frame.origin.x, y: display.frame.origin.y,
                           width: CGFloat(display.width), height: CGFloat(display.height))
-            let isCursorScreen = displayFrame.contains(mouseLocation)
+            let isCursorScreen = displayFrame.contains(mouseLocationAtCapture)
+            let cursorLocationOnScreen: CGPoint?
+            if isCursorScreen {
+                cursorLocationOnScreen = CGPoint(
+                    x: mouseLocationAtCapture.x - displayFrame.origin.x,
+                    y: mouseLocationAtCapture.y - displayFrame.origin.y
+                )
+            } else {
+                cursorLocationOnScreen = nil
+            }
 
             let filter = SCContentFilter(display: display, excludingWindows: ownAppWindows)
 
@@ -103,17 +111,29 @@ enum CompanionScreenCaptureUtility {
 
             let screenLabel: String
             if sortedDisplays.count == 1 {
-                screenLabel = "user's screen (cursor is here)"
-            } else if isCursorScreen {
-                screenLabel = "screen \(displayIndex + 1) of \(sortedDisplays.count) — cursor is on this screen (primary focus)"
+                if let localCursor = cursorLocationOnScreen {
+                    let normCursorX = Int((localCursor.x / max(1.0, displayFrame.width)) * 1000)
+                    let visionY = max(0.0, displayFrame.height - localCursor.y)
+                    let normCursorY = Int((visionY / max(1.0, displayFrame.height)) * 1000)
+                    screenLabel = "screen 1 — user's cursor is currently at [\(normCursorX),\(normCursorY)]"
+                } else {
+                    screenLabel = "screen 1"
+                }
+            } else if isCursorScreen, let localCursor = cursorLocationOnScreen {
+                let normCursorX = Int((localCursor.x / max(1.0, displayFrame.width)) * 1000)
+                let visionY = max(0.0, displayFrame.height - localCursor.y)
+                let normCursorY = Int((visionY / max(1.0, displayFrame.height)) * 1000)
+                screenLabel = "screen \(displayIndex + 1) of \(sortedDisplays.count) — user's cursor is currently at [\(normCursorX),\(normCursorY)] on this screen"
             } else {
-                screenLabel = "screen \(displayIndex + 1) of \(sortedDisplays.count) — secondary screen"
+                screenLabel = "screen \(displayIndex + 1) of \(sortedDisplays.count)"
             }
 
             capturedScreens.append(CompanionScreenCapture(
                 imageData: jpegData,
                 label: screenLabel,
                 isCursorScreen: isCursorScreen,
+                cursorLocationOnScreen: cursorLocationOnScreen,
+                globalCursorLocationAtCapture: mouseLocationAtCapture,
                 displayWidthInPoints: Int(displayFrame.width),
                 displayHeightInPoints: Int(displayFrame.height),
                 displayFrame: displayFrame,

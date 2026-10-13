@@ -382,7 +382,8 @@ struct BlueCursorView: View {
                 return
             }
 
-            startNavigatingToElement(screenLocation: screenLocation)
+            let startLocation = companionManager.detectedElementStartScreenLocation
+            startNavigatingToElement(screenLocation: screenLocation, startScreenLocation: startLocation)
         }
     }
 
@@ -411,7 +412,13 @@ struct BlueCursorView: View {
     private func startTrackingCursor() {
         timer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
             let mouseLocation = NSEvent.mouseLocation
-            self.isCursorOnThisScreen = self.screenFrame.contains(mouseLocation)
+            let mouseIsOnThisScreen = self.screenFrame.contains(mouseLocation)
+            self.isCursorOnThisScreen = mouseIsOnThisScreen
+
+            // Only track cursor on this screen if the mouse is ACTUALLY on this screen.
+            // When the mouse is on another monitor, do not update cursorPosition with
+            // off-screen coordinates that would corrupt navigation flight start points.
+            guard mouseIsOnThisScreen else { return }
 
             // During forward flight or pointing, the buddy is NOT interrupted by
             // mouse movement — it completes its full animation and return flight.
@@ -453,7 +460,10 @@ struct BlueCursorView: View {
     // MARK: - Element Navigation
 
     /// Starts animating the buddy toward a detected UI element location.
-    private func startNavigatingToElement(screenLocation: CGPoint) {
+    private func startNavigatingToElement(
+        screenLocation: CGPoint,
+        startScreenLocation: CGPoint? = nil
+    ) {
         // Don't interrupt welcome animation
         guard !showWelcome || welcomeText.isEmpty else { return }
 
@@ -474,32 +484,50 @@ struct BlueCursorView: View {
             y: max(20, min(offsetTarget.y, screenFrame.height - 20))
         )
 
-        // Record the current cursor position so we can detect if the user
-        // moves the mouse enough to cancel the return flight
-        let mouseLocation = NSEvent.mouseLocation
-        cursorPositionWhenNavigationStarted = convertScreenPointToSwiftUICoordinates(mouseLocation)
+        // Determine initial flight start position:
+        // 1. If startScreenLocation was recorded and is on this screen, use it.
+        // 2. Else if the current mouse is on this screen, use current mouse.
+        // 3. Otherwise (mouse was on another screen), enter smoothly from the nearest screen edge.
+        let initialFlightStart: CGPoint
+        let currentMouse = NSEvent.mouseLocation
+
+        if let startLoc = startScreenLocation, screenFrame.contains(startLoc) {
+            let startInSwiftUI = convertScreenPointToSwiftUICoordinates(startLoc)
+            initialFlightStart = CGPoint(x: startInSwiftUI.x + 35, y: startInSwiftUI.y + 25)
+        } else if screenFrame.contains(currentMouse) {
+            let mouseInSwiftUI = convertScreenPointToSwiftUICoordinates(currentMouse)
+            initialFlightStart = CGPoint(x: mouseInSwiftUI.x + 35, y: mouseInSwiftUI.y + 25)
+        } else {
+            let rawMouseInSwiftUI = convertScreenPointToSwiftUICoordinates(currentMouse)
+            let clampedEdgeX = max(20, min(rawMouseInSwiftUI.x, screenFrame.width - 20))
+            let clampedEdgeY = max(20, min(rawMouseInSwiftUI.y, screenFrame.height - 20))
+            initialFlightStart = CGPoint(x: clampedEdgeX, y: clampedEdgeY)
+        }
+
+        self.cursorPosition = initialFlightStart
+        self.cursorPositionWhenNavigationStarted = initialFlightStart
 
         // Enter navigation mode — stop cursor following
         buddyNavigationMode = .navigatingToTarget
         isReturningToCursor = false
 
-        animateBezierFlightArc(to: clampedTarget) {
+        animateBezierFlightArc(from: initialFlightStart, to: clampedTarget) {
             guard self.buddyNavigationMode == .navigatingToTarget else { return }
             self.startPointingAtElement()
         }
     }
 
-    /// Animates the buddy along a quadratic bezier arc from its current position
+    /// Animates the buddy along a quadratic bezier arc from startPosition
     /// to the specified destination. The triangle rotates to face its direction
     /// of travel (tangent to the curve) each frame, scales up at the midpoint
     /// for a "swooping" feel, and the glow intensifies during flight.
     private func animateBezierFlightArc(
+        from startPosition: CGPoint,
         to destination: CGPoint,
         onComplete: @escaping () -> Void
     ) {
         navigationAnimationTimer?.invalidate()
 
-        let startPosition = cursorPosition
         let endPosition = destination
 
         let deltaX = endPosition.x - startPosition.x
@@ -635,16 +663,26 @@ struct BlueCursorView: View {
     /// Flies the buddy back to the current cursor position after pointing is done.
     private func startFlyingBackToCursor() {
         let mouseLocation = NSEvent.mouseLocation
-        let cursorInSwiftUI = convertScreenPointToSwiftUICoordinates(mouseLocation)
-        let cursorWithTrackingOffset = CGPoint(x: cursorInSwiftUI.x + 35, y: cursorInSwiftUI.y + 25)
+        if screenFrame.contains(mouseLocation) {
+            let cursorInSwiftUI = convertScreenPointToSwiftUICoordinates(mouseLocation)
+            let cursorWithTrackingOffset = CGPoint(x: cursorInSwiftUI.x + 35, y: cursorInSwiftUI.y + 25)
 
-        cursorPositionWhenNavigationStarted = cursorInSwiftUI
+            cursorPositionWhenNavigationStarted = cursorInSwiftUI
+            buddyNavigationMode = .navigatingToTarget
+            isReturningToCursor = true
 
-        buddyNavigationMode = .navigatingToTarget
-        isReturningToCursor = true
-
-        animateBezierFlightArc(to: cursorWithTrackingOffset) {
-            self.finishNavigationAndResumeFollowing()
+            animateBezierFlightArc(from: self.cursorPosition, to: cursorWithTrackingOffset) {
+                self.finishNavigationAndResumeFollowing()
+            }
+        } else {
+            // Mouse has moved to another screen: smoothly fade out at current position
+            withAnimation(.easeOut(duration: 0.3)) {
+                self.navigationBubbleOpacity = 0.0
+                self.cursorOpacity = 0.0
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                self.finishNavigationAndResumeFollowing()
+            }
         }
     }
 

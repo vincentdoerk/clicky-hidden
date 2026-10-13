@@ -35,6 +35,8 @@ final class CompanionManager: ObservableObject {
     /// buddy should fly to and point at. Parsed from Claude's response;
     /// observed by BlueCursorView to trigger the flight animation.
     @Published var detectedElementScreenLocation: CGPoint?
+    /// Screen location (global AppKit coords) where the cursor was when the screenshot was taken.
+    @Published var detectedElementStartScreenLocation: CGPoint?
     /// The display frame (global AppKit coords) of the screen the detected
     /// element is on, so BlueCursorView knows which screen overlay should animate.
     @Published var detectedElementDisplayFrame: CGRect?
@@ -89,6 +91,9 @@ final class CompanionManager: ObservableObject {
     private var audioPowerCancellable: AnyCancellable?
     private var accessibilityCheckTimer: Timer?
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
+    /// Pre-captured screen data taken immediately on push-to-talk release so the
+    /// captured screen state and cursor location match the moment speech ended.
+    private var precapturedScreensTask: Task<[CompanionScreenCapture], Error>?
     /// Scheduled hide for transient cursor mode — cancelled if the user
     /// speaks again before the delay elapses.
     private var transientHideTask: Task<Void, Never>?
@@ -301,6 +306,7 @@ final class CompanionManager: ObservableObject {
 
     func clearDetectedElementLocation() {
         detectedElementScreenLocation = nil
+        detectedElementStartScreenLocation = nil
         detectedElementDisplayFrame = nil
         detectedElementBubbleText = nil
     }
@@ -552,6 +558,13 @@ final class CompanionManager: ObservableObject {
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
+
+            // Pre-capture screenshots and cursor location immediately upon hotkey release
+            // so we freeze the exact screen state and cursor position the moment speech ended.
+            precapturedScreensTask?.cancel()
+            precapturedScreensTask = Task { @MainActor in
+                try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+            }
         case .none:
             break
         }
@@ -619,8 +632,14 @@ final class CompanionManager: ObservableObject {
             voiceState = .processing
 
             do {
-                // Capture all connected screens so the AI has full context
-                let screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+                // Use screens pre-captured at hotkey release, or capture now if not yet available
+                let screenCaptures: [CompanionScreenCapture]
+                if let task = precapturedScreensTask {
+                    screenCaptures = (try? await task.value) ?? (try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG())
+                } else {
+                    screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+                }
+                precapturedScreensTask = nil
 
                 guard !Task.isCancelled else { return }
 
@@ -669,7 +688,7 @@ final class CompanionManager: ObservableObject {
                        screenNumber >= 1 && screenNumber <= screenCaptures.count {
                         return screenCaptures[screenNumber - 1]
                     }
-                    return screenCaptures.first(where: { $0.isCursorScreen })
+                    return screenCaptures.first(where: { $0.isCursorScreen }) ?? screenCaptures.first
                 }()
 
                 if let pointCoordinate = parseResult.coordinate,
@@ -709,6 +728,7 @@ final class CompanionManager: ObservableObject {
                         y: appKitY + displayFrame.origin.y
                     )
 
+                    detectedElementStartScreenLocation = targetScreenCapture.globalCursorLocationAtCapture
                     detectedElementScreenLocation = globalLocation
                     detectedElementDisplayFrame = displayFrame
                     ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
