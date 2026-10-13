@@ -248,6 +248,23 @@ final class CompanionManager: ObservableObject {
     /// speaks again before the delay elapses.
     private var transientHideTask: Task<Void, Never>?
 
+    /// Returns true if Clicky is currently busy with an active user interaction or background process
+    /// (e.g. shortcut is pressed, microphone recording audio, processing transcript, streaming AI response,
+    /// synthesizing/playing TTS audio, pointing at a screen element, or auditioning a voice).
+    /// When true, the cursor overlay must never be hidden or scheduled to hide.
+    var hasActiveUserInteractionOrBackgroundProcess: Bool {
+        globalPushToTalkShortcutMonitor.isShortcutCurrentlyPressed
+            || buddyDictationManager.isDictationInProgress
+            || buddyDictationManager.isActivelyRecordingAudio
+            || pendingKeyboardShortcutStartTask != nil
+            || currentResponseTask != nil
+            || precapturedScreensTask != nil
+            || textToSpeechProvider.isPlaying
+            || isPlayingVoicePreview
+            || detectedElementScreenLocation != nil
+            || voiceState != .idle
+    }
+
     /// True when all three required permissions (accessibility, screen recording,
     /// microphone) are granted. Used by the panel to show a single "all good" state.
     var allPermissionsGranted: Bool {
@@ -448,7 +465,11 @@ final class CompanionManager: ObservableObject {
         detectedElementHighlightSize = nil
         detectedElementDisplayFrame = nil
         detectedElementBubbleText = nil
-        if !textToSpeechProvider.isPlaying {
+
+        // Only transition to idle and schedule a transient fade-out if there is no other
+        // active user interaction or process underway (e.g. user is not recording audio,
+        // TTS is not playing, and no response is generating).
+        if !hasActiveUserInteractionOrBackgroundProcess {
             voiceState = .idle
             scheduleTransientHideIfNeeded()
         }
@@ -459,9 +480,15 @@ final class CompanionManager: ObservableObject {
         buddyDictationManager.cancelCurrentDictation()
         overlayWindowManager.hideOverlay()
         transientHideTask?.cancel()
+        transientHideTask = nil
 
         currentResponseTask?.cancel()
         currentResponseTask = nil
+        pendingKeyboardShortcutStartTask?.cancel()
+        pendingKeyboardShortcutStartTask = nil
+        precapturedScreensTask?.cancel()
+        precapturedScreensTask = nil
+
         shortcutTransitionCancellable?.cancel()
         voiceStateCancellable?.cancel()
         audioPowerCancellable?.cancel()
@@ -620,8 +647,8 @@ final class CompanionManager: ObservableObject {
                     self.voiceState = .processing
                     self.processingStepText = "Mikrofon vorbereiten..."
                 } else {
-                    // If no response task is active, check whether dictation was not in progress
-                    if self.currentResponseTask == nil {
+                    // Only transition to idle and schedule transient hide if no active process is running
+                    if !self.hasActiveUserInteractionOrBackgroundProcess {
                         self.voiceState = .idle
                         self.processingStepText = ""
                         self.scheduleTransientHideIfNeeded()
@@ -660,8 +687,13 @@ final class CompanionManager: ObservableObject {
 
             // Cancel any in-progress response, TTS, or voice preview from a previous utterance
             currentResponseTask?.cancel()
+            currentResponseTask = nil
             stopVoicePreview()
             clearDetectedElementLocation()
+
+            // State immediately enters processing while microphone is prepared
+            voiceState = .processing
+            processingStepText = "Mikrofon vorbereiten..."
 
             // Dismiss the onboarding prompt if it's showing
             if showOnboardingPrompt {
@@ -685,8 +717,8 @@ final class CompanionManager: ObservableObject {
             }
 
             pendingKeyboardShortcutStartTask?.cancel()
-            pendingKeyboardShortcutStartTask = Task {
-                await buddyDictationManager.startPushToTalkFromKeyboardShortcut(
+            pendingKeyboardShortcutStartTask = Task { [weak self] in
+                await self?.buddyDictationManager.startPushToTalkFromKeyboardShortcut(
                     currentDraftText: "",
                     updateDraftText: { _ in
                         // Partial transcripts are hidden (waveform-only UI)
@@ -698,6 +730,7 @@ final class CompanionManager: ObservableObject {
                         self?.sendTranscriptToClaudeWithScreenshot(transcript: finalTranscript)
                     }
                 )
+                self?.pendingKeyboardShortcutStartTask = nil
             }
         case .released:
             // Cancel the pending start task in case the user released the shortcut
@@ -786,6 +819,10 @@ final class CompanionManager: ObservableObject {
         transientHideTask = nil
 
         currentResponseTask = Task {
+            defer {
+                precapturedScreensTask = nil
+            }
+
             // Stay in processing (spinner) state — no streaming text displayed
             voiceState = .processing
             processingStepText = "Bildschirm erfassen..."
@@ -1000,6 +1037,8 @@ final class CompanionManager: ObservableObject {
                 speakLocalErrorFallback(errorMessage: "Ollama is not running or encountered an error. Please make sure Ollama is running.")
             }
 
+            currentResponseTask = nil
+
             if !Task.isCancelled {
                 // If neither pointing nor TTS is active, switch to idle and schedule hide.
                 // Otherwise, the active process (pointing landing or TTS finish) will trigger it.
@@ -1012,46 +1051,71 @@ final class CompanionManager: ObservableObject {
                     processingStepText = ""
                 }
             }
-            currentResponseTask = nil
         }
     }
 
     /// If the cursor is in transient mode (user toggled "Show Clicky" off),
-    /// waits for TTS playback and any pointing animation to finish, then
-    /// fades out the overlay after a 5-second pause. Cancelled automatically
-    /// if the user starts another push-to-talk interaction.
+    /// waits until all active processes (recording, thinking, TTS, element pointing)
+    /// have completed, then fades out the overlay after 5 seconds of continuous idle time.
+    /// Cancelled immediately if the user starts another push-to-talk interaction.
     private func scheduleTransientHideIfNeeded() {
         guard !isClickyCursorEnabled && isOverlayVisible else { return }
 
+        // If an active user interaction or background process is already underway,
+        // cancel any pending hide and do not schedule a new one.
+        guard !hasActiveUserInteractionOrBackgroundProcess else {
+            transientHideTask?.cancel()
+            transientHideTask = nil
+            return
+        }
+
         transientHideTask?.cancel()
         transientHideTask = Task {
-            // Wait for TTS audio to finish playing
-            while textToSpeechProvider.isPlaying {
-                try? await Task.sleep(nanoseconds: 200_000_000)
+            let pollingIntervalNanoseconds: UInt64 = 100_000_000 // 100ms
+            let requiredContinuousIdleNanoseconds: UInt64 = 5_000_000_000 // 5 seconds
+            var accumulatedContinuousIdleNanoseconds: UInt64 = 0
+
+            while accumulatedContinuousIdleNanoseconds < requiredContinuousIdleNanoseconds {
+                try? await Task.sleep(nanoseconds: pollingIntervalNanoseconds)
                 guard !Task.isCancelled else { return }
+
+                if hasActiveUserInteractionOrBackgroundProcess {
+                    // An active process began (e.g. user pressed push-to-talk shortcut or speech started).
+                    // Reset the idle accumulator and wait until the active process finishes completely.
+                    accumulatedContinuousIdleNanoseconds = 0
+                    while hasActiveUserInteractionOrBackgroundProcess {
+                        try? await Task.sleep(nanoseconds: pollingIntervalNanoseconds)
+                        guard !Task.isCancelled else { return }
+                    }
+                } else {
+                    accumulatedContinuousIdleNanoseconds += pollingIntervalNanoseconds
+                }
             }
 
-            // Wait for pointing animation to finish (location is cleared
-            // when the buddy flies back to the cursor)
-            while detectedElementScreenLocation != nil {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                guard !Task.isCancelled else { return }
-            }
-
-            // Pause 5 seconds after everything finishes (returning to cursor and speaking),
-            // then smoothly fade out.
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
+            guard !hasActiveUserInteractionOrBackgroundProcess else { return }
+            guard !isClickyCursorEnabled && isOverlayVisible else { return }
+
             overlayWindowManager.fadeOutAndHideOverlay()
             isOverlayVisible = false
+            transientHideTask = nil
         }
     }
 
-    /// Speaks an error message using macOS system TTS when local Ollama or TTS fails.
+    /// Speaks an error message using the text-to-speech provider when local Ollama fails.
     private func speakLocalErrorFallback(errorMessage: String) {
-        let synthesizer = NSSpeechSynthesizer()
-        synthesizer.startSpeaking(errorMessage)
         voiceState = .responding
+        textToSpeechProvider.speakCompleteText(
+            errorMessage,
+            onFirstAudioStarted: { [weak self] in
+                self?.voiceState = .responding
+            },
+            onPlaybackFinished: { [weak self] in
+                guard let self = self else { return }
+                self.voiceState = .idle
+                self.scheduleTransientHideIfNeeded()
+            }
+        )
     }
 
     // MARK: - Point Tag Parsing

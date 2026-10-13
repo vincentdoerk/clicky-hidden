@@ -90,4 +90,29 @@ struct leanring_buddyTests {
         #expect(UserDefaults.standard.double(forKey: "selectedTTSSpeechRate") == 1.25)
         companionManager.setSpeechRateMultiplier(1.0)
     }
+
+    @Test @MainActor func companionManagerActiveProcessDetection() async throws {
+        let companionManager = CompanionManager()
+
+        // When listening or processing, active process must be true
+        companionManager.voiceState = .listening
+        #expect(companionManager.hasActiveUserInteractionOrBackgroundProcess == true)
+
+        companionManager.voiceState = .processing
+        #expect(companionManager.hasActiveUserInteractionOrBackgroundProcess == true)
+
+        companionManager.voiceState = .responding
+        #expect(companionManager.hasActiveUserInteractionOrBackgroundProcess == true)
+
+        // Pointing at element must also mark active process as true
+        companionManager.voiceState = .idle
+        companionManager.detectedElementScreenLocation = CGPoint(x: 150, y: 300)
+        #expect(companionManager.hasActiveUserInteractionOrBackgroundProcess == true)
+
+        // Clearing detected location while voice state is listening must NOT revert to idle
+        companionManager.voiceState = .listening
+        companionManager.clearDetectedElementLocation()
+        #expect(companionManager.detectedElementScreenLocation == nil)
+        #expect(companionManager.voiceState == .listening)
+    }
 }
