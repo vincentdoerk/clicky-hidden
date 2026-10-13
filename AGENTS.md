@@ -15,8 +15,8 @@ Operates 100% locally with zero cloud dependencies or API keys required.
 - **Framework**: SwiftUI (macOS native) with AppKit bridging for menu bar panel and cursor overlay
 - **Pattern**: MVVM with `@StateObject` / `@Published` state management
 - **AI Chat**: Local Ollama vision LLMs (`http://localhost:11434/api/chat`) via NDJSON streaming with dynamic model discovery
-- **Speech-to-Text**: Apple Speech framework (`SFSpeechRecognizer`) local on-device transcription default
-- **Text-to-Speech**: Apple Speech Synthesis (`AVSpeechSynthesizer`) local on-device TTS default
+- **Speech-to-Text**: Whisper C++ (`whisper.cpp`) local on-device transcription with `large-v3-turbo` model default (Apple Speech, AssemblyAI, and OpenAI as optional fallbacks)
+- **Text-to-Speech**: Apple Speech Synthesis (`AVSpeechSynthesizer`) local on-device TTS default with German natural Siri voices
 - **Screen Capture**: ScreenCaptureKit (macOS 14.2+), multi-monitor support
 - **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcut via listen-only CGEvent tap.
 - **Element Pointing**: Vision LLM embeds `[POINT:x,y:label:screenN]` tags in responses. The overlay parses these, maps coordinates to the correct monitor, and animates the blue cursor along a bezier arc to the target.
@@ -63,7 +63,8 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `BuddyTranscriptionProvider.swift` | ~100 | Protocol surface and provider factory for voice transcription backends. Resolves provider based on `VoiceTranscriptionProvider` in Info.plist — AssemblyAI, OpenAI, or Apple Speech. |
 | `AssemblyAIStreamingTranscriptionProvider.swift` | ~478 | Streaming transcription provider. Fetches temp tokens from the Cloudflare Worker, opens an AssemblyAI v3 websocket, streams PCM16 audio, tracks turn-based transcripts, and delivers finalized text on key-up. Shares a single URLSession across all sessions. |
 | `OpenAIAudioTranscriptionProvider.swift` | ~317 | Upload-based transcription provider. Buffers push-to-talk audio locally, uploads as WAV on release, returns finalized transcript. |
-| `AppleSpeechTranscriptionProvider.swift` | ~147 | Local on-device transcription provider backed by Apple's Speech framework (active default). |
+| `AppleSpeechTranscriptionProvider.swift` | ~147 | Local on-device transcription provider backed by Apple's Speech framework. |
+| `WhisperCPPTranscriptionProvider.swift` | ~215 | Local on-device transcription provider backed by whisper.cpp and large-v3-turbo model (active default). |
 | `BuddyAudioConversionSupport.swift` | ~108 | Audio conversion helpers. Converts live mic buffers to PCM16 mono audio and builds WAV payloads for upload-based providers. |
 | `GlobalPushToTalkShortcutMonitor.swift` | ~132 | System-wide push-to-talk monitor. Owns the listen-only `CGEvent` tap and publishes press/release transitions. |
 | `OllamaAPI.swift` | ~210 | Local Ollama vision chat API client with NDJSON streaming and `/api/tags` vision model capability discovery. |

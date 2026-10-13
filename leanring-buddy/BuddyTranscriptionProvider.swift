@@ -31,6 +31,7 @@ protocol BuddyTranscriptionProvider {
 
 enum BuddyTranscriptionProviderFactory {
     private enum PreferredProvider: String {
+        case whisperCPP = "whisper"
         case assemblyAI = "assemblyai"
         case openAI = "openai"
         case appleSpeech = "apple"
@@ -48,8 +49,17 @@ enum BuddyTranscriptionProviderFactory {
             .lowercased()
         let preferredProvider = preferredProviderRawValue.flatMap(PreferredProvider.init(rawValue:))
 
+        let whisperCPPProvider = WhisperCPPTranscriptionProvider()
         let assemblyAIProvider = AssemblyAIStreamingTranscriptionProvider()
         let openAIProvider = OpenAIAudioTranscriptionProvider()
+
+        if preferredProvider == .whisperCPP {
+            if whisperCPPProvider.isConfigured {
+                return whisperCPPProvider
+            }
+            print("⚠️ Transcription: Whisper C++ preferred but not configured, falling back to Apple Speech")
+            return AppleSpeechTranscriptionProvider()
+        }
 
         if preferredProvider == .appleSpeech {
             return AppleSpeechTranscriptionProvider()

@@ -57,31 +57,53 @@ final class AppleTTSClient: NSObject, AVSpeechSynthesizerDelegate {
 
     // MARK: - Voice Selection
 
-    /// Selects the best natural-sounding voice for the current locale or English fallback.
+    /// Selects the best natural-sounding voice for the preferred locale or German/English fallback.
     private func selectBestSpeechVoice() -> AVSpeechSynthesisVoice? {
-        let currentLanguageCode = Locale.current.language.languageCode?.identifier ?? "en"
         let allAvailableVoices = AVSpeechSynthesisVoice.speechVoices()
 
-        // 1. Look for an enhanced or premium voice matching the current locale language
-        if let enhancedVoiceForCurrentLocale = allAvailableVoices.first(where: { availableVoice in
-            availableVoice.language.starts(with: currentLanguageCode) &&
-            availableVoice.quality == .enhanced
-        }) {
-            return enhancedVoiceForCurrentLocale
+        // Prioritize preferred languages (e.g. ["de-DE", "en-US"])
+        var candidateLanguages: [String] = []
+        for preferredLanguage in Locale.preferredLanguages {
+            let languagePrefix = String(preferredLanguage.prefix(2)).lowercased()
+            if !candidateLanguages.contains(languagePrefix) {
+                candidateLanguages.append(languagePrefix)
+            }
+        }
+        if !candidateLanguages.contains("de") {
+            candidateLanguages.append("de")
+        }
+        if !candidateLanguages.contains("en") {
+            candidateLanguages.append("en")
         }
 
-        // 2. Look for any voice matching current locale language
-        if let defaultVoiceForCurrentLocale = AVSpeechSynthesisVoice(language: Locale.current.identifier) ??
-                                              AVSpeechSynthesisVoice(language: currentLanguageCode) {
-            return defaultVoiceForCurrentLocale
+        // 1. Check for Premium (rawValue == 2) or Siri natural voices in candidate languages
+        for candidateLanguage in candidateLanguages {
+            if let premiumVoice = allAvailableVoices.first(where: { availableVoice in
+                availableVoice.language.lowercased().starts(with: candidateLanguage) &&
+                (availableVoice.quality.rawValue == 2 || availableVoice.identifier.lowercased().contains("siri"))
+            }) {
+                print("🔊 Apple TTS: selected premium/Siri voice: \(premiumVoice.name) (\(premiumVoice.identifier))")
+                return premiumVoice
+            }
         }
 
-        // 3. Fallback: look for an enhanced English voice (e.g. Siri / Samantha)
-        if let enhancedEnglishVoice = allAvailableVoices.first(where: { availableVoice in
-            availableVoice.language.starts(with: "en") &&
-            availableVoice.quality == .enhanced
+        // 2. Check for Enhanced voices in candidate languages
+        for candidateLanguage in candidateLanguages {
+            if let enhancedVoice = allAvailableVoices.first(where: { availableVoice in
+                availableVoice.language.lowercased().starts(with: candidateLanguage) &&
+                availableVoice.quality == .enhanced
+            }) {
+                print("🔊 Apple TTS: selected enhanced voice: \(enhancedVoice.name) (\(enhancedVoice.identifier))")
+                return enhancedVoice
+            }
+        }
+
+        // 3. Fallback to any voice matching German
+        if let germanVoice = allAvailableVoices.first(where: { availableVoice in
+            availableVoice.language.lowercased().starts(with: "de")
         }) {
-            return enhancedEnglishVoice
+            print("🔊 Apple TTS: selected German voice: \(germanVoice.name) (\(germanVoice.identifier))")
+            return germanVoice
         }
 
         // 4. Default en-US fallback

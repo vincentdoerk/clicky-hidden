@@ -42,13 +42,16 @@ final class AppleSpeechTranscriptionProvider: BuddyTranscriptionProvider {
     }
 
     private static func makeBestAvailableSpeechRecognizer() -> SFSpeechRecognizer? {
-        let preferredLocales = [
-            Locale.autoupdatingCurrent,
-            Locale(identifier: "en-US")
-        ]
+        var preferredLocales: [Locale] = []
+        for preferredLanguageIdentifier in Locale.preferredLanguages {
+            preferredLocales.append(Locale(identifier: preferredLanguageIdentifier))
+        }
+        preferredLocales.append(Locale(identifier: "de-DE"))
+        preferredLocales.append(Locale.autoupdatingCurrent)
+        preferredLocales.append(Locale(identifier: "en-US"))
 
         for preferredLocale in preferredLocales {
-            if let speechRecognizer = SFSpeechRecognizer(locale: preferredLocale) {
+            if let speechRecognizer = SFSpeechRecognizer(locale: preferredLocale), speechRecognizer.isAvailable {
                 return speechRecognizer
             }
         }
