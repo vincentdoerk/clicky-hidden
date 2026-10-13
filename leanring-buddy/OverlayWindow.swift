@@ -458,9 +458,22 @@ struct BlueCursorView: View {
 
     // MARK: - Element Navigation
 
+    /// Computes the SwiftUI coordinates for the mouse position, clamped to screen edges
+    /// if the mouse is currently on another display.
+    private func getLiveMouseOrigin(from mouseLocation: CGPoint) -> CGPoint {
+        if screenFrame.contains(mouseLocation) {
+            let mouseInSwiftUI = convertScreenPointToSwiftUICoordinates(mouseLocation)
+            return CGPoint(x: mouseInSwiftUI.x + 35, y: mouseInSwiftUI.y + 25)
+        } else {
+            let rawMouseInSwiftUI = convertScreenPointToSwiftUICoordinates(mouseLocation)
+            let clampedEdgeX = max(20, min(rawMouseInSwiftUI.x, screenFrame.width - 20))
+            let clampedEdgeY = max(20, min(rawMouseInSwiftUI.y, screenFrame.height - 20))
+            return CGPoint(x: clampedEdgeX, y: clampedEdgeY)
+        }
+    }
+
     /// Starts animating the buddy toward a detected UI element location.
-    /// The flight starts from wherever the user's cursor is RIGHT NOW in the moment
-    /// navigation is triggered.
+    /// The flight path's origin vector is evaluated dynamically against the live mouse position in every frame.
     private func startNavigatingToElement(screenLocation: CGPoint) {
         // Don't interrupt welcome animation
         guard !showWelcome || welcomeText.isEmpty else { return }
@@ -482,33 +495,105 @@ struct BlueCursorView: View {
             y: max(20, min(offsetTarget.y, screenFrame.height - 20))
         )
 
-        // Determine where the flight animation begins:
-        // Use the user's CURRENT mouse position at the exact moment navigation is triggered!
-        let currentMouse = NSEvent.mouseLocation
-        let initialFlightStart: CGPoint
-
-        if screenFrame.contains(currentMouse) {
-            // Mouse is on this screen: start seamlessly from the user's current cursor position
-            let mouseInSwiftUI = convertScreenPointToSwiftUICoordinates(currentMouse)
-            initialFlightStart = CGPoint(x: mouseInSwiftUI.x + 35, y: mouseInSwiftUI.y + 25)
-        } else {
-            // Mouse is on another screen: enter smoothly from the nearest screen edge
-            let rawMouseInSwiftUI = convertScreenPointToSwiftUICoordinates(currentMouse)
-            let clampedEdgeX = max(20, min(rawMouseInSwiftUI.x, screenFrame.width - 20))
-            let clampedEdgeY = max(20, min(rawMouseInSwiftUI.y, screenFrame.height - 20))
-            initialFlightStart = CGPoint(x: clampedEdgeX, y: clampedEdgeY)
-        }
+        // Determine initial start point from the live mouse position
+        let initialFlightStart = getLiveMouseOrigin(from: NSEvent.mouseLocation)
 
         self.cursorPosition = initialFlightStart
         self.cursorPositionWhenNavigationStarted = initialFlightStart
 
-        // Enter navigation mode — stop cursor following
+        // Enter navigation mode — regular cursor following is paused while flight handles live tracking
         buddyNavigationMode = .navigatingToTarget
         isReturningToCursor = false
 
-        animateBezierFlightArc(from: initialFlightStart, to: clampedTarget) {
+        animateDynamicFlightToTarget(destination: clampedTarget) {
             guard self.buddyNavigationMode == .navigatingToTarget else { return }
             self.startPointingAtElement()
+        }
+    }
+
+    /// Animates the buddy along a dynamic quadratic bezier curve to destination.
+    /// In every frame (60 FPS), the flight path's origin vector is evaluated using the live mouse cursor position.
+    /// If the user moves their mouse during flight, the trajectory dynamically shifts in real time while
+    /// converging smoothly and precisely onto the target element.
+    private func animateDynamicFlightToTarget(
+        destination: CGPoint,
+        onComplete: @escaping () -> Void
+    ) {
+        navigationAnimationTimer?.invalidate()
+
+        let endPosition = destination
+        let initialOrigin = getLiveMouseOrigin(from: NSEvent.mouseLocation)
+        let initialDeltaX = endPosition.x - initialOrigin.x
+        let initialDeltaY = endPosition.y - initialOrigin.y
+        let initialDistance = hypot(initialDeltaX, initialDeltaY)
+
+        // Flight duration scales with initial distance: short hops are quick, long
+        // flights are more dramatic. Clamped to 0.6s–1.4s.
+        let flightDurationSeconds = min(max(initialDistance / 800.0, 0.6), 1.4)
+        let frameInterval: Double = 1.0 / 60.0
+        let totalFrames = max(1, Int(flightDurationSeconds / frameInterval))
+        var currentFrame = 0
+
+        navigationAnimationTimer = Timer.scheduledTimer(withTimeInterval: frameInterval, repeats: true) { _ in
+            currentFrame += 1
+
+            if currentFrame >= totalFrames {
+                self.navigationAnimationTimer?.invalidate()
+                self.navigationAnimationTimer = nil
+                self.cursorPosition = endPosition
+                self.buddyFlightScale = 1.0
+                onComplete()
+                return
+            }
+
+            // Linear progress 0→1 over the flight duration
+            let linearProgress = Double(currentFrame) / Double(totalFrames)
+
+            // Smoothstep easeInOut: 3t² - 2t³ (Hermite interpolation)
+            let t = linearProgress * linearProgress * (3.0 - 2.0 * linearProgress)
+
+            // In each frame, query the live mouse position for the dynamic flight origin vector
+            let currentLiveOrigin = self.getLiveMouseOrigin(from: NSEvent.mouseLocation)
+
+            // Dynamic midpoint and arc height computed from live origin and fixed destination
+            let currentDeltaX = endPosition.x - currentLiveOrigin.x
+            let currentDeltaY = endPosition.y - currentLiveOrigin.y
+            let currentDistance = hypot(currentDeltaX, currentDeltaY)
+
+            let midPoint = CGPoint(
+                x: (currentLiveOrigin.x + endPosition.x) / 2.0,
+                y: (currentLiveOrigin.y + endPosition.y) / 2.0
+            )
+            let arcHeight = min(currentDistance * 0.2, 80.0)
+            let controlPoint = CGPoint(x: midPoint.x, y: midPoint.y - arcHeight)
+
+            // Dynamic quadratic bezier evaluated between the live origin and fixed target:
+            // B(t) = (1-t)²·P0(t) + 2(1-t)t·P1(t) + t²·P2
+            let oneMinusT = 1.0 - t
+            let bezierX = oneMinusT * oneMinusT * currentLiveOrigin.x
+                        + 2.0 * oneMinusT * t * controlPoint.x
+                        + t * t * endPosition.x
+            let bezierY = oneMinusT * oneMinusT * currentLiveOrigin.y
+                        + 2.0 * oneMinusT * t * controlPoint.y
+                        + t * t * endPosition.y
+
+            self.cursorPosition = CGPoint(x: bezierX, y: bezierY)
+
+            // Rotation: face the direction of travel by computing the tangent
+            // to the bezier curve. B'(t) = 2(1-t)(P1-P0) + 2t(P2-P1)
+            let tangentX = 2.0 * oneMinusT * (controlPoint.x - currentLiveOrigin.x)
+                         + 2.0 * t * (endPosition.x - controlPoint.x)
+            let tangentY = 2.0 * oneMinusT * (controlPoint.y - currentLiveOrigin.y)
+                         + 2.0 * t * (endPosition.y - controlPoint.y)
+
+            if hypot(tangentX, tangentY) > 0.001 {
+                self.triangleRotationDegrees = atan2(tangentY, tangentX) * (180.0 / .pi) + 90.0
+            }
+
+            // Scale pulse: sin curve peaks at midpoint of the flight.
+            // Buddy grows to ~1.3x at the apex, then shrinks back to 1.0x on landing.
+            let scalePulse = sin(linearProgress * .pi)
+            self.buddyFlightScale = 1.0 + scalePulse * 0.3
         }
     }
 
