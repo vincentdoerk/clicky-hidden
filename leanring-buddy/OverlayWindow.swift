@@ -382,8 +382,7 @@ struct BlueCursorView: View {
                 return
             }
 
-            let startLocation = companionManager.detectedElementStartScreenLocation
-            startNavigatingToElement(screenLocation: screenLocation, startScreenLocation: startLocation)
+            startNavigatingToElement(screenLocation: screenLocation)
         }
     }
 
@@ -460,10 +459,9 @@ struct BlueCursorView: View {
     // MARK: - Element Navigation
 
     /// Starts animating the buddy toward a detected UI element location.
-    private func startNavigatingToElement(
-        screenLocation: CGPoint,
-        startScreenLocation: CGPoint? = nil
-    ) {
+    /// The flight starts from wherever the user's cursor is RIGHT NOW in the moment
+    /// navigation is triggered.
+    private func startNavigatingToElement(screenLocation: CGPoint) {
         // Don't interrupt welcome animation
         guard !showWelcome || welcomeText.isEmpty else { return }
 
@@ -484,20 +482,17 @@ struct BlueCursorView: View {
             y: max(20, min(offsetTarget.y, screenFrame.height - 20))
         )
 
-        // Determine initial flight start position:
-        // 1. If startScreenLocation was recorded and is on this screen, use it.
-        // 2. Else if the current mouse is on this screen, use current mouse.
-        // 3. Otherwise (mouse was on another screen), enter smoothly from the nearest screen edge.
-        let initialFlightStart: CGPoint
+        // Determine where the flight animation begins:
+        // Use the user's CURRENT mouse position at the exact moment navigation is triggered!
         let currentMouse = NSEvent.mouseLocation
+        let initialFlightStart: CGPoint
 
-        if let startLoc = startScreenLocation, screenFrame.contains(startLoc) {
-            let startInSwiftUI = convertScreenPointToSwiftUICoordinates(startLoc)
-            initialFlightStart = CGPoint(x: startInSwiftUI.x + 35, y: startInSwiftUI.y + 25)
-        } else if screenFrame.contains(currentMouse) {
+        if screenFrame.contains(currentMouse) {
+            // Mouse is on this screen: start seamlessly from the user's current cursor position
             let mouseInSwiftUI = convertScreenPointToSwiftUICoordinates(currentMouse)
             initialFlightStart = CGPoint(x: mouseInSwiftUI.x + 35, y: mouseInSwiftUI.y + 25)
         } else {
+            // Mouse is on another screen: enter smoothly from the nearest screen edge
             let rawMouseInSwiftUI = convertScreenPointToSwiftUICoordinates(currentMouse)
             let clampedEdgeX = max(20, min(rawMouseInSwiftUI.x, screenFrame.width - 20))
             let clampedEdgeY = max(20, min(rawMouseInSwiftUI.y, screenFrame.height - 20))

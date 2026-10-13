@@ -35,8 +35,6 @@ final class CompanionManager: ObservableObject {
     /// buddy should fly to and point at. Parsed from Claude's response;
     /// observed by BlueCursorView to trigger the flight animation.
     @Published var detectedElementScreenLocation: CGPoint?
-    /// Screen location (global AppKit coords) where the cursor was when the screenshot was taken.
-    @Published var detectedElementStartScreenLocation: CGPoint?
     /// The display frame (global AppKit coords) of the screen the detected
     /// element is on, so BlueCursorView knows which screen overlay should animate.
     @Published var detectedElementDisplayFrame: CGRect?
@@ -306,7 +304,6 @@ final class CompanionManager: ObservableObject {
 
     func clearDetectedElementLocation() {
         detectedElementScreenLocation = nil
-        detectedElementStartScreenLocation = nil
         detectedElementDisplayFrame = nil
         detectedElementBubbleText = nil
     }
@@ -534,6 +531,13 @@ final class CompanionManager: ObservableObject {
 
             ClickyAnalytics.trackPushToTalkStarted()
 
+            // Pre-capture screenshots immediately when the user presses Control-Option!
+            // This captures the exact screen content the user is looking at when asking for help.
+            precapturedScreensTask?.cancel()
+            precapturedScreensTask = Task { @MainActor in
+                try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
+            }
+
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = Task {
                 await buddyDictationManager.startPushToTalkFromKeyboardShortcut(
@@ -558,13 +562,6 @@ final class CompanionManager: ObservableObject {
             pendingKeyboardShortcutStartTask?.cancel()
             pendingKeyboardShortcutStartTask = nil
             buddyDictationManager.stopPushToTalkFromKeyboardShortcut()
-
-            // Pre-capture screenshots and cursor location immediately upon hotkey release
-            // so we freeze the exact screen state and cursor position the moment speech ended.
-            precapturedScreensTask?.cancel()
-            precapturedScreensTask = Task { @MainActor in
-                try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
-            }
         case .none:
             break
         }
@@ -632,7 +629,7 @@ final class CompanionManager: ObservableObject {
             voiceState = .processing
 
             do {
-                // Use screens pre-captured at hotkey release, or capture now if not yet available
+                // Use screens pre-captured at hotkey press, or capture now if not yet available
                 let screenCaptures: [CompanionScreenCapture]
                 if let task = precapturedScreensTask, let precaptured = try? await task.value {
                     screenCaptures = precaptured
@@ -728,7 +725,6 @@ final class CompanionManager: ObservableObject {
                         y: appKitY + displayFrame.origin.y
                     )
 
-                    detectedElementStartScreenLocation = targetScreenCapture.globalCursorLocationAtCapture
                     detectedElementScreenLocation = globalLocation
                     detectedElementDisplayFrame = displayFrame
                     ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
