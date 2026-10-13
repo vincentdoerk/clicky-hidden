@@ -17,4 +17,5 @@ protocol PermissionsManaging: AnyObject {
     func refreshPermissions()
     func startPolling(onChange: @escaping () -> Void)
     func stopPolling()
+    func markScreenContentPermissionGranted()
 }

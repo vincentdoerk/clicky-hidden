@@ -18,6 +18,15 @@ final class MockPermissionsManager: PermissionsManaging {
     var refreshPermissionsCallCount: Int = 0
     var isPolling: Bool = false
     var pollingChangeHandler: (() -> Void)? = nil
+    var markScreenContentPermissionGrantedCallCount: Int = 0
+
+    init(allGranted: Bool = true) {
+        self.allPermissionsGranted = allGranted
+        self.hasAccessibilityPermission = allGranted
+        self.hasScreenRecordingPermission = allGranted
+        self.hasMicrophonePermission = allGranted
+        self.hasScreenContentPermission = allGranted
+    }
 
     func refreshPermissions() {
         refreshPermissionsCallCount += 1
@@ -34,6 +43,16 @@ final class MockPermissionsManager: PermissionsManaging {
     }
 
     func simulatePermissionChange() {
+        pollingChangeHandler?()
+    }
+
+    func markScreenContentPermissionGranted() {
+        markScreenContentPermissionGrantedCallCount += 1
+        hasScreenContentPermission = true
+        allPermissionsGranted = hasAccessibilityPermission
+            && hasScreenRecordingPermission
+            && hasMicrophonePermission
+            && hasScreenContentPermission
         pollingChangeHandler?()
     }
 }

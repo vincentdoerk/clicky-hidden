@@ -52,8 +52,11 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `leanring_buddyApp.swift` | ~89 | Menu bar app entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate` which creates `MenuBarPanelManager` and starts `CompanionManager`. No main window — the app lives entirely in the status bar. |
-| `CompanionManager.swift` | ~1285 | Central state machine. Owns dictation, shortcut monitoring, screen capture, Ollama API, Apple TTS, MLX Audio TTS, voice preview, and overlay management. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, voice timbre, speech rate, and cursor visibility. Coordinates the full push-to-talk → screenshot → Ollama → TTS → pointing pipeline. |
+| `leanring_buddyApp.swift` | ~89 | Menu bar app entry point. Uses `@NSApplicationDelegateAdaptor` with `CompanionAppDelegate` which creates `MenuBarPanelManager` and starts `CompanionCoordinator`. No main window — the app lives entirely in the status bar. |
+| `CompanionCoordinator.swift` | ~550 | Central state machine and coordinator. Owns dictation, shortcut monitoring, screen capture, Ollama API, Apple TTS, MLX Audio TTS, voice preview, and overlay management with dependency injection. Tracks voice state (idle/listening/processing/responding), conversation history, model selection, voice timbre, speech rate, and cursor visibility. Coordinates the full push-to-talk → screenshot → Ollama → TTS → pointing pipeline. |
+| `CompanionManager.swift` | ~12 | Backward-compatibility typealias for `CompanionCoordinator`. |
+| `CompanionVoiceState.swift` | ~15 | Enum modeling the voice interaction lifecycle states (idle, listening, processing, responding). |
+| `PointingDetection.swift` | ~135 | Model and coordinate parser for vision model [POINT:...] tags, bounding box sizes, and OCR snapping candidate keywords. |
 | `MenuBarPanelManager.swift` | ~243 | NSStatusItem + custom NSPanel lifecycle. Creates the menu bar icon, manages the floating companion panel (show/hide/position), installs click-outside-to-dismiss monitor. |
 | `CompanionPanelView.swift` | ~1020 | SwiftUI panel content for the menu bar dropdown. Shows companion status, push-to-talk instructions, VLM (Ollama vision model) picker, TTS model selector (Qwen3-TTS 0.6B/1.7B, Kokoro-82M, Apple Speech) with language and voice pickers, live audition button, speech rate multiplier picker, permissions UI, and quit button. Dark aesthetic using `DS` design system. |
 | `OverlayWindow.swift` | ~1050 | Full-screen transparent overlay hosting the blue cursor, response text, waveform, and spinner. Handles cursor animation, element pointing with bezier arcs, multi-monitor coordinate mapping, and fade-out transitions. |
