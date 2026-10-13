@@ -209,16 +209,27 @@ final class CompanionManager: ObservableObject {
     @Published var onboardingPromptOpacity: Double = 0.0
     @Published var showOnboardingPrompt: Bool = false
 
-    // MARK: - Onboarding Music
+    let permissionsManager: any PermissionsManaging
+    let onboardingAudioPlayer: OnboardingAudioPlayer
+    let onboardingLeadService: OnboardingLeadService
 
-    private var onboardingMusicPlayer: AVAudioPlayer?
-    private var onboardingMusicFadeTimer: Timer?
-
-    let buddyDictationManager = BuddyDictationManager()
+    let buddyDictationManager: BuddyDictationManager
     let globalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor()
     let overlayWindowManager = OverlayWindowManager()
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
+
+    init(
+        permissionsManager: any PermissionsManaging = PermissionsManager(),
+        onboardingAudioPlayer: OnboardingAudioPlayer = OnboardingAudioPlayer(),
+        onboardingLeadService: OnboardingLeadService = OnboardingLeadService(),
+        buddyDictationManager: BuddyDictationManager = BuddyDictationManager()
+    ) {
+        self.permissionsManager = permissionsManager
+        self.onboardingAudioPlayer = onboardingAudioPlayer
+        self.onboardingLeadService = onboardingLeadService
+        self.buddyDictationManager = buddyDictationManager
+    }
 
     private lazy var ollamaAPI: OllamaAPI = {
         return OllamaAPI(selectedModelName: selectedModel)
@@ -239,7 +250,6 @@ final class CompanionManager: ObservableObject {
     private var shortcutTransitionCancellable: AnyCancellable?
     private var voiceStateCancellable: AnyCancellable?
     private var audioPowerCancellable: AnyCancellable?
-    private var accessibilityCheckTimer: Timer?
     private var pendingKeyboardShortcutStartTask: Task<Void, Never>?
     /// Pre-captured screen data taken immediately on push-to-talk release so the
     /// captured screen state and cursor location match the moment speech ended.
@@ -268,7 +278,7 @@ final class CompanionManager: ObservableObject {
     /// True when all three required permissions (accessibility, screen recording,
     /// microphone) are granted. Used by the panel to show a single "all good" state.
     var allPermissionsGranted: Bool {
-        hasAccessibilityPermission && hasScreenRecordingPermission && hasMicrophonePermission && hasScreenContentPermission
+        permissionsManager.allPermissionsGranted
     }
 
     /// Whether the blue cursor overlay is currently visible on screen.
@@ -346,25 +356,17 @@ final class CompanionManager: ObservableObject {
         hasSubmittedEmail = true
         UserDefaults.standard.set(true, forKey: "hasSubmittedEmail")
 
-        // Identify user in PostHog
-        PostHogSDK.shared.identify(trimmedEmail, userProperties: [
-            "email": trimmedEmail
-        ])
-
-        // Submit to FormSpark
-        Task {
-            var request = URLRequest(url: URL(string: "https://submit-form.com/RWbGJxmIs")!)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try? JSONSerialization.data(withJSONObject: ["email": trimmedEmail])
-            _ = try? await URLSession.shared.data(for: request)
-        }
+        onboardingLeadService.submitLeadInBackground(email: trimmedEmail)
     }
 
     func start() {
         refreshAllPermissions()
         print("🔑 Clicky start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
-        startPermissionPolling()
+        permissionsManager.startPolling { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.refreshAllPermissions()
+            }
+        }
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
@@ -400,64 +402,13 @@ final class CompanionManager: ObservableObject {
 
         ClickyAnalytics.trackOnboardingStarted()
 
-        // Play Besaid theme at 60% volume, fade out after 1m 30s
-        startOnboardingMusic()
+        // Play Besaid theme at 30% volume, fade out after 1m 30s
+        onboardingAudioPlayer.startOnboardingMusic()
 
         // Show the overlay for the first time — isFirstAppearance triggers
         // the welcome animation and onboarding video
         overlayWindowManager.showOverlay(onScreens: NSScreen.screens, companionManager: self)
         isOverlayVisible = true
-    }
-
-    private func stopOnboardingMusic() {
-        onboardingMusicFadeTimer?.invalidate()
-        onboardingMusicFadeTimer = nil
-        onboardingMusicPlayer?.stop()
-        onboardingMusicPlayer = nil
-    }
-
-    private func startOnboardingMusic() {
-        stopOnboardingMusic()
-        guard let musicURL = Bundle.main.url(forResource: "ff", withExtension: "mp3") else {
-            print("⚠️ Clicky: ff.mp3 not found in bundle")
-            return
-        }
-
-        do {
-            let player = try AVAudioPlayer(contentsOf: musicURL)
-            player.volume = 0.3
-            player.play()
-            self.onboardingMusicPlayer = player
-
-            // After 1m 30s, fade the music out over 3s
-            onboardingMusicFadeTimer = Timer.scheduledTimer(withTimeInterval: 90.0, repeats: false) { [weak self] _ in
-                self?.fadeOutOnboardingMusic()
-            }
-        } catch {
-            print("⚠️ Clicky: Failed to play onboarding music: \(error)")
-        }
-    }
-
-    private func fadeOutOnboardingMusic() {
-        guard let player = onboardingMusicPlayer else { return }
-
-        let fadeSteps = 30
-        let fadeDuration: Double = 3.0
-        let stepInterval = fadeDuration / Double(fadeSteps)
-        let volumeDecrement = player.volume / Float(fadeSteps)
-        var stepsRemaining = fadeSteps
-
-        onboardingMusicFadeTimer = Timer.scheduledTimer(withTimeInterval: stepInterval, repeats: true) { [weak self] timer in
-            stepsRemaining -= 1
-            player.volume -= volumeDecrement
-
-            if stepsRemaining <= 0 {
-                timer.invalidate()
-                player.stop()
-                self?.onboardingMusicPlayer = nil
-                self?.onboardingMusicFadeTimer = nil
-            }
-        }
     }
 
     func clearDetectedElementLocation() {
@@ -476,6 +427,8 @@ final class CompanionManager: ObservableObject {
     }
 
     func stop() {
+        permissionsManager.stopPolling()
+        onboardingAudioPlayer.stopOnboardingMusic()
         globalPushToTalkShortcutMonitor.stop()
         buddyDictationManager.cancelCurrentDictation()
         overlayWindowManager.hideOverlay()
@@ -492,8 +445,6 @@ final class CompanionManager: ObservableObject {
         shortcutTransitionCancellable?.cancel()
         voiceStateCancellable?.cancel()
         audioPowerCancellable?.cancel()
-        accessibilityCheckTimer?.invalidate()
-        accessibilityCheckTimer = nil
         textToSpeechProvider.shutdown()
     }
 
@@ -503,19 +454,18 @@ final class CompanionManager: ObservableObject {
         let previouslyHadMicrophone = hasMicrophonePermission
         let previouslyHadAll = allPermissionsGranted
 
-        let currentlyHasAccessibility = WindowPositionManager.hasAccessibilityPermission()
-        hasAccessibilityPermission = currentlyHasAccessibility
+        permissionsManager.refreshPermissions()
 
-        if currentlyHasAccessibility {
+        hasAccessibilityPermission = permissionsManager.hasAccessibilityPermission
+        hasScreenRecordingPermission = permissionsManager.hasScreenRecordingPermission
+        hasMicrophonePermission = permissionsManager.hasMicrophonePermission
+        hasScreenContentPermission = permissionsManager.hasScreenContentPermission
+
+        if hasAccessibilityPermission {
             globalPushToTalkShortcutMonitor.start()
         } else {
             globalPushToTalkShortcutMonitor.stop()
         }
-
-        hasScreenRecordingPermission = WindowPositionManager.hasScreenRecordingPermission()
-
-        let micAuthStatus = AVCaptureDevice.authorizationStatus(for: .audio)
-        hasMicrophonePermission = micAuthStatus == .authorized
 
         // Debug: log permission state on changes
         if previouslyHadAccessibility != hasAccessibilityPermission
@@ -533,11 +483,6 @@ final class CompanionManager: ObservableObject {
         }
         if !previouslyHadMicrophone && hasMicrophonePermission {
             ClickyAnalytics.trackPermissionGranted(permission: "microphone")
-        }
-        // Screen content permission is persisted — once the user has approved the
-        // SCShareableContent picker, we don't need to re-check it.
-        if !hasScreenContentPermission {
-            hasScreenContentPermission = UserDefaults.standard.bool(forKey: "hasScreenContentPermission")
         }
 
         if !previouslyHadAll && allPermissionsGranted {
@@ -572,8 +517,13 @@ final class CompanionManager: ObservableObject {
                 await MainActor.run {
                     isRequestingScreenContent = false
                     guard didCapture else { return }
-                    hasScreenContentPermission = true
-                    UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
+                    if let concreteManager = permissionsManager as? PermissionsManager {
+                        concreteManager.markScreenContentPermissionGranted()
+                    } else {
+                        UserDefaults.standard.set(true, forKey: "hasScreenContentPermission")
+                        permissionsManager.refreshPermissions()
+                    }
+                    hasScreenContentPermission = permissionsManager.hasScreenContentPermission
                     ClickyAnalytics.trackPermissionGranted(permission: "screen_content")
 
                     // If onboarding was already completed, show the cursor overlay now
@@ -591,28 +541,6 @@ final class CompanionManager: ObservableObject {
     }
 
     // MARK: - Private
-
-    /// Triggers the system microphone prompt if the user has never been asked.
-    /// Once granted/denied the status sticks and polling picks it up.
-    private func promptForMicrophoneIfNotDetermined() {
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else { return }
-        AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-            Task { @MainActor [weak self] in
-                self?.hasMicrophonePermission = granted
-            }
-        }
-    }
-
-    /// Polls all permissions frequently so the UI updates live after the
-    /// user grants them in System Settings. Screen Recording is the exception —
-    /// macOS requires an app restart for that one to take effect.
-    private func startPermissionPolling() {
-        accessibilityCheckTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.refreshAllPermissions()
-            }
-        }
-    }
 
     private func bindAudioPowerLevel() {
         audioPowerCancellable = buddyDictationManager.$currentAudioPowerLevel

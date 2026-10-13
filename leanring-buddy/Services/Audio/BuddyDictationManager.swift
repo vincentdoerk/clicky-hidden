@@ -263,7 +263,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     }
 
     private let transcriptionProvider: any BuddyTranscriptionProvider
-    private let audioEngine = AVAudioEngine()
+    private let audioEngineCaptureService: AudioEngineCaptureService
     private var activeTranscriptionSession: (any BuddyStreamingTranscriptionSession)?
     private var activeStartSource: BuddyDictationStartSource?
     private var draftCallbacks: BuddyDictationDraftCallbacks?
@@ -280,10 +280,13 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     /// rapid follow-up requests that arrive before macOS updates its cache.
     private var lastPermissionRequestCompletedAt: Date?
 
-    override init() {
-        let transcriptionProvider = BuddyTranscriptionProviderFactory.makeDefaultProvider()
+    init(
+        transcriptionProvider: any BuddyTranscriptionProvider = BuddyTranscriptionProviderFactory.makeDefaultProvider(),
+        audioEngineCaptureService: AudioEngineCaptureService = AudioEngineCaptureService()
+    ) {
         self.transcriptionProvider = transcriptionProvider
         self.transcriptionProviderDisplayName = transcriptionProvider.displayName
+        self.audioEngineCaptureService = audioEngineCaptureService
         super.init()
     }
 
@@ -342,8 +345,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             draftCallbacks?.updateDraftText(currentDraftText)
         }
 
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngineCaptureService.stopCapturing()
         activeTranscriptionSession?.cancel()
 
         resetSessionState()
@@ -451,8 +453,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             try await startRecognitionSession()
             guard !Task.isCancelled else {
                 print("🎙️ BuddyDictationManager: start cancelled (shortcut released during session start)")
-                audioEngine.stop()
-                audioEngine.inputNode.removeTap(onBus: 0)
+                audioEngineCaptureService.stopCapturing()
                 activeTranscriptionSession?.cancel()
                 resetSessionState()
                 return
@@ -491,8 +492,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         let finalTranscriptFallbackDelaySeconds = activeTranscriptionSession?.finalTranscriptFallbackDelaySeconds
             ?? Self.defaultFinalTranscriptFallbackDelaySeconds
 
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngineCaptureService.stopCapturing()
         activeTranscriptionSession?.requestFinalTranscript()
 
         finalizeFallbackWorkItem?.cancel()
@@ -546,17 +546,10 @@ final class BuddyDictationManager: NSObject, ObservableObject {
         self.activeTranscriptionSession = activeTranscriptionSession
         print("🎙️ BuddyDictationManager: provider ready, starting audio engine")
 
-        let inputNode = audioEngine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
+        try audioEngineCaptureService.startCapturing { [weak self] buffer in
             self?.activeTranscriptionSession?.appendAudioBuffer(buffer)
             self?.updateAudioPowerLevel(from: buffer)
         }
-
-        audioEngine.prepare()
-        try audioEngine.start()
     }
 
     private func handleRecognitionError(_ error: Error) {
@@ -593,8 +586,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
             currentDraftCallbacks?.updateDraftText(finalDraftText)
         }
 
-        audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngineCaptureService.stopCapturing()
         activeTranscriptionSession?.cancel()
 
         let hasFinalDraftToSubmit = shouldSubmitFinalDraft && !finalTranscriptText.isEmpty
@@ -685,20 +677,7 @@ final class BuddyDictationManager: NSObject, ObservableObject {
     }
 
     private func updateAudioPowerLevel(from audioBuffer: AVAudioPCMBuffer) {
-        guard let channelData = audioBuffer.floatChannelData else { return }
-
-        let channelSamples = channelData[0]
-        let frameCount = Int(audioBuffer.frameLength)
-        guard frameCount > 0 else { return }
-
-        var summedSquares: Float = 0
-        for sampleIndex in 0..<frameCount {
-            let sample = channelSamples[sampleIndex]
-            summedSquares += sample * sample
-        }
-
-        let rootMeanSquare = sqrt(summedSquares / Float(frameCount))
-        let boostedLevel = min(max(rootMeanSquare * 10.2, 0), 1)
+        let boostedLevel = AudioPowerMeter.calculatePowerLevel(from: audioBuffer)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
