@@ -634,8 +634,8 @@ final class CompanionManager: ObservableObject {
             do {
                 // Use screens pre-captured at hotkey release, or capture now if not yet available
                 let screenCaptures: [CompanionScreenCapture]
-                if let task = precapturedScreensTask {
-                    screenCaptures = (try? await task.value) ?? (try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG())
+                if let task = precapturedScreensTask, let precaptured = try? await task.value {
+                    screenCaptures = precaptured
                 } else {
                     screenCaptures = try await CompanionScreenCaptureUtility.captureAllScreensAsJPEG()
                 }
