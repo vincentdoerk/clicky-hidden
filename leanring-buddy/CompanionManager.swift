@@ -582,17 +582,25 @@ final class CompanionManager: ObservableObject {
 
     don't point at things when it would be pointless — like if the user asks a general knowledge question, or the conversation has nothing to do with what's on screen, or you'd just be pointing at something obvious they're already looking at. but if there's a specific UI element, menu, button, or area on screen that's relevant to what you're helping with, point at it.
 
-    when you point, append a coordinate tag at the very end of your response, AFTER your spoken text. the screenshot images are labeled with their pixel dimensions. use those dimensions as the coordinate space. the origin (0,0) is the top-left corner of the image. x increases rightward, y increases downward.
+    coordinate system:
+    use a normalized coordinate grid from 0 to 1000 for each screen image.
+    origin (0,0) is top-left, (1000,1000) is bottom-right.
+    x ranges from 0 (far left) to 1000 (far right).
+    y ranges from 0 (top) to 1000 (bottom).
+    always point at the EXACT center of the specific button, icon, or clickable element.
 
-    format: [POINT:x,y:label] where x,y are integer pixel coordinates in the screenshot's coordinate space, and label is a short 1-3 word description of the element (like "search bar" or "save button"). if the element is on the cursor's screen you can omit the screen number. if the element is on a DIFFERENT screen, append :screenN where N is the screen number from the image label (e.g. :screen2). this is important — without the screen number, the cursor will point at the wrong place.
-
-    if pointing wouldn't help, append [POINT:none].
+    format: append [POINT:x,y:label] or [POINT:x,y:label:screenN] at the end of your response.
+    - x, y: integer coordinates normalized from 0 to 1000.
+    - label: short description (1-3 words, like "play button" or "search bar").
+    - if the element is on the primary screen (cursor screen), omit screen number or append :screen1.
+    - if the element is on screen 2, append :screen2 (e.g. [POINT:450,300:terminal:screen2]).
+    - if pointing wouldn't help, append [POINT:none].
 
     examples:
-    - user asks how to color grade in final cut: "you'll want to open the color inspector — it's right up in the top right area of the toolbar. click that and you'll get all the color wheels and curves. [POINT:1100,42:color inspector]"
-    - user asks what html is: "html stands for hypertext markup language, it's basically the skeleton of every web page. curious how it connects to the css you're looking at? [POINT:none]"
-    - user asks how to commit in xcode: "see that source control menu up top? click that and hit commit, or you can use command option c as a shortcut. [POINT:285,11:source control]"
-    - element is on screen 2 (not where cursor is): "that's over on your other monitor — see the terminal window? [POINT:400,300:terminal:screen2]"
+    - user asks for the Apple menu: "hier ist das apple-menü ganz oben links. [POINT:8,10:apple-menü]"
+    - user asks how to search in spotify: "klicke oben auf suchen. [POINT:245,28:suche]"
+    - user asks what html is: "html ist die grundstruktur jeder webseite. [POINT:none]"
+    - element is on screen 2: "das terminal ist drüben auf deinem zweiten monitor. [POINT:450,320:terminal:screen2]"
     """
 
     // MARK: - AI Response Pipeline
@@ -666,24 +674,33 @@ final class CompanionManager: ObservableObject {
 
                 if let pointCoordinate = parseResult.coordinate,
                    let targetScreenCapture {
-                    // Claude's coordinates are in the screenshot's pixel space
-                    // (top-left origin, e.g. 1280x831). Scale to the display's
-                    // point space (e.g. 1512x982), then convert to AppKit global coords.
-                    let screenshotWidth = CGFloat(targetScreenCapture.screenshotWidthInPixels)
-                    let screenshotHeight = CGFloat(targetScreenCapture.screenshotHeightInPixels)
                     let displayWidth = CGFloat(targetScreenCapture.displayWidthInPoints)
                     let displayHeight = CGFloat(targetScreenCapture.displayHeightInPoints)
                     let displayFrame = targetScreenCapture.displayFrame
 
-                    // Clamp to screenshot coordinate space
-                    let clampedX = max(0, min(pointCoordinate.x, screenshotWidth))
-                    let clampedY = max(0, min(pointCoordinate.y, screenshotHeight))
+                    // Modern vision models (like Gemma 4, Qwen 2.5-VL) output coordinates
+                    // normalized in a 0..1000 grid. If coordinates are <= 1000, treat them as 0..1000.
+                    // If a model ever outputs raw pixel coordinates > 1000, normalize by screenshot dimensions.
+                    let isNormalizedGrid = pointCoordinate.x <= 1000.0 && pointCoordinate.y <= 1000.0
 
-                    // Scale from screenshot pixels to display points
-                    let displayLocalX = clampedX * (displayWidth / screenshotWidth)
-                    let displayLocalY = clampedY * (displayHeight / screenshotHeight)
+                    let normalizedX: CGFloat
+                    let normalizedY: CGFloat
 
-                    // Convert from top-left origin (screenshot) to bottom-left origin (AppKit)
+                    if isNormalizedGrid {
+                        normalizedX = max(0.0, min(pointCoordinate.x, 1000.0)) / 1000.0
+                        normalizedY = max(0.0, min(pointCoordinate.y, 1000.0)) / 1000.0
+                    } else {
+                        let screenshotWidth = CGFloat(targetScreenCapture.screenshotWidthInPixels)
+                        let screenshotHeight = CGFloat(targetScreenCapture.screenshotHeightInPixels)
+                        normalizedX = max(0.0, min(pointCoordinate.x, screenshotWidth)) / max(1.0, screenshotWidth)
+                        normalizedY = max(0.0, min(pointCoordinate.y, screenshotHeight)) / max(1.0, screenshotHeight)
+                    }
+
+                    // Scale normalized 0..1 coordinates to display points (points are what macOS UI uses)
+                    let displayLocalX = normalizedX * displayWidth
+                    let displayLocalY = normalizedY * displayHeight
+
+                    // Convert from top-left origin (vision model) to bottom-left origin (AppKit)
                     let appKitY = displayHeight - displayLocalY
 
                     // Convert display-local coords to global screen coords
@@ -695,7 +712,9 @@ final class CompanionManager: ObservableObject {
                     detectedElementScreenLocation = globalLocation
                     detectedElementDisplayFrame = displayFrame
                     ClickyAnalytics.trackElementPointed(elementLabel: parseResult.elementLabel)
-                    print("🎯 Element pointing: (\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) → \"\(parseResult.elementLabel ?? "element")\"")
+
+                    let screenIndexDescription = parseResult.screenNumber.map { "screen \($0)" } ?? "cursor screen"
+                    print("🎯 Element pointing: raw=(\(Int(pointCoordinate.x)), \(Int(pointCoordinate.y))) norm=(\(String(format: "%.1f%%", normalizedX * 100)), \(String(format: "%.1f%%", normalizedY * 100))) on \(screenIndexDescription) (\(Int(displayWidth))x\(Int(displayHeight)) pt) → displayLocal=(\(Int(displayLocalX)), \(Int(displayLocalY))) global=(\(Int(globalLocation.x)), \(Int(globalLocation.y))) [\"\(parseResult.elementLabel ?? "element")\"]")
                 } else {
                     print("🎯 Element pointing: \(parseResult.elementLabel ?? "no element")")
                 }
@@ -795,46 +814,65 @@ final class CompanionManager: ObservableObject {
         let screenNumber: Int?
     }
 
-    /// Parses a [POINT:x,y:label:screenN] or [POINT:none] tag from the end of Claude's response.
+    /// Parses a [POINT:x,y:label:screenN] or [POINT:none] tag from the model's response.
     /// Returns the spoken text (tag removed) and the optional coordinate + label + screen number.
     static func parsePointingCoordinates(from responseText: String) -> PointingParseResult {
-        // Match [POINT:none] or [POINT:123,456:label] or [POINT:123,456:label:screen2]
-        let pattern = #"\[POINT:(?:none|(\d+)\s*,\s*(\d+)(?::([^\]:\s][^\]:]*?))?(?::screen(\d+))?)\]\s*$"#
+        // Tolerantly match [POINT:none] or [POINT:x,y:label:screenN] or [POINT:x,y:label] or [POINT:x,y] or [x,y:label]
+        let pattern = #"\[(?:POINT\s*:\s*)?(?:none|(\d+)\s*,\s*(\d+)(?:\s*:\s*([^\]:\n]+?))?(?:\s*:\s*screen\s*(\d+))?)\s*\]"#
 
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
-              let match = regex.firstMatch(in: responseText, range: NSRange(responseText.startIndex..., in: responseText)) else {
-            // No tag found at all
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
             return PointingParseResult(spokenText: responseText, coordinate: nil, elementLabel: nil, screenNumber: nil)
         }
 
-        // Remove the tag from the spoken text
-        let tagRange = Range(match.range, in: responseText)!
-        let spokenText = String(responseText[..<tagRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let fullRange = NSRange(responseText.startIndex..., in: responseText)
+        let matches = regex.matches(in: responseText, options: [], range: fullRange)
 
-        // Check if it's [POINT:none]
-        guard match.numberOfRanges >= 3,
-              let xRange = Range(match.range(at: 1), in: responseText),
-              let yRange = Range(match.range(at: 2), in: responseText),
-              let x = Double(responseText[xRange]),
-              let y = Double(responseText[yRange]) else {
-            return PointingParseResult(spokenText: spokenText, coordinate: nil, elementLabel: "none", screenNumber: nil)
+        guard let lastMatch = matches.last else {
+            return PointingParseResult(spokenText: responseText, coordinate: nil, elementLabel: nil, screenNumber: nil)
         }
 
-        var elementLabel: String? = nil
-        if match.numberOfRanges >= 4, let labelRange = Range(match.range(at: 3), in: responseText) {
-            elementLabel = String(responseText[labelRange]).trimmingCharacters(in: .whitespaces)
+        // Remove the matched tag from the spoken text so TTS does not read "[POINT:...]" aloud
+        var cleanSpokenText = responseText
+        if let matchRange = Range(lastMatch.range, in: responseText) {
+            cleanSpokenText.removeSubrange(matchRange)
+            cleanSpokenText = cleanSpokenText.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        var screenNumber: Int? = nil
-        if match.numberOfRanges >= 5, let screenRange = Range(match.range(at: 4), in: responseText) {
-            screenNumber = Int(responseText[screenRange])
+        // Check if it was [POINT:none] (no coordinate capture groups)
+        guard lastMatch.numberOfRanges >= 3,
+              let xRange = Range(lastMatch.range(at: 1), in: responseText),
+              let yRange = Range(lastMatch.range(at: 2), in: responseText),
+              let xCoordinate = Double(responseText[xRange]),
+              let yCoordinate = Double(responseText[yRange]) else {
+            return PointingParseResult(spokenText: cleanSpokenText, coordinate: nil, elementLabel: "none", screenNumber: nil)
+        }
+
+        var parsedElementLabel: String? = nil
+        var parsedScreenNumber: Int? = nil
+
+        if lastMatch.numberOfRanges >= 4, let labelRange = Range(lastMatch.range(at: 3), in: responseText) {
+            let candidateLabel = String(responseText[labelRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            // If the label is like "screen2", parse it as screen number instead
+            if let screenMatch = candidateLabel.range(of: #"^screen\s*(\d+)$"#, options: [.regularExpression, .caseInsensitive]) {
+                let digits = candidateLabel[screenMatch].filter(\.isNumber)
+                parsedScreenNumber = Int(digits)
+            } else if !candidateLabel.isEmpty {
+                parsedElementLabel = candidateLabel
+            }
+        }
+
+        if lastMatch.numberOfRanges >= 5, let screenRange = Range(lastMatch.range(at: 4), in: responseText) {
+            let screenText = String(responseText[screenRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let extractedScreenNumber = Int(screenText) {
+                parsedScreenNumber = extractedScreenNumber
+            }
         }
 
         return PointingParseResult(
-            spokenText: spokenText,
-            coordinate: CGPoint(x: x, y: y),
-            elementLabel: elementLabel,
-            screenNumber: screenNumber
+            spokenText: cleanSpokenText,
+            coordinate: CGPoint(x: xCoordinate, y: yCoordinate),
+            elementLabel: parsedElementLabel,
+            screenNumber: parsedScreenNumber
         )
     }
 

@@ -460,11 +460,12 @@ struct BlueCursorView: View {
         // Convert the AppKit screen location to SwiftUI coordinates for this screen
         let targetInSwiftUI = convertScreenPointToSwiftUICoordinates(screenLocation)
 
-        // Offset the target so the buddy sits beside the element rather than
-        // directly on top of it — 8px to the right, 12px below.
+        // Offset the target so the buddy's triangle tip points directly at the element.
+        // The triangle is 16x16 with its tip pointing up-left (-35° rotation).
+        // Placing the center at (+6, +7) aligns the tip precisely on targetInSwiftUI.
         let offsetTarget = CGPoint(
-            x: targetInSwiftUI.x + 8,
-            y: targetInSwiftUI.y + 12
+            x: targetInSwiftUI.x + 6,
+            y: targetInSwiftUI.y + 7
         )
 
         // Clamp target to screen bounds with padding

@@ -117,8 +117,8 @@ enum CompanionScreenCaptureUtility {
                 displayWidthInPoints: Int(displayFrame.width),
                 displayHeightInPoints: Int(displayFrame.height),
                 displayFrame: displayFrame,
-                screenshotWidthInPixels: configuration.width,
-                screenshotHeightInPixels: configuration.height
+                screenshotWidthInPixels: cgImage.width,
+                screenshotHeightInPixels: cgImage.height
             ))
         }
 
