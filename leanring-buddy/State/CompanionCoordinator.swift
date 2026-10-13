@@ -366,7 +366,7 @@ open class CompanionCoordinator: ObservableObject {
                         self?.lastTranscript = finalTranscript
                         print("🗣️ Companion received transcript: \(finalTranscript)")
                         ClickyAnalytics.trackUserMessageSent(transcript: finalTranscript)
-                        self?.sendTranscriptToClaudeWithScreenshot(transcript: finalTranscript)
+                        self?.sendTranscriptToVisionModelWithScreenshot(transcript: finalTranscript)
                     }
                 )
                 self?.pendingKeyboardShortcutStartTask = nil
@@ -439,7 +439,7 @@ open class CompanionCoordinator: ObservableObject {
     - element is on screen 2: "das terminal ist drüben auf deinem zweiten monitor. [POINT:450,320:200,80:terminal:screen2]"
     """
 
-    private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
+    public func sendTranscriptToVisionModelWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
         textToSpeechProvider.stopPlayback()
 
@@ -642,6 +642,11 @@ open class CompanionCoordinator: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Backwards-compatibility alias forwarding to `sendTranscriptToVisionModelWithScreenshot(transcript:)`.
+    public func sendTranscriptToClaudeWithScreenshot(transcript: String) {
+        sendTranscriptToVisionModelWithScreenshot(transcript: transcript)
     }
 
     private func speakLocalErrorFallback(errorMessage: String) {

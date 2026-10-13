@@ -48,7 +48,7 @@ public enum PointingCoordinateParser {
     /// Parses a [POINT:x,y:w,h:label:screenN] or [POINT:x,y:label] or [POINT:none] tag from the model's response.
     /// Returns the spoken text (tag removed) along with coordinates, optional bounding box size, label, and screen number.
     public static func parsePointingCoordinates(from responseText: String) -> PointingParseResult {
-        let tagPattern = #"\[(?:POINT\s*:\s*)?([^\]\n]+)\]"#
+        let tagPattern = #"\[POINT\s*:\s*([^\]\n]+)\]"#
         guard let regex = try? NSRegularExpression(pattern: tagPattern, options: [.caseInsensitive]) else {
             return PointingParseResult(spokenText: responseText, coordinate: nil, size: nil, elementLabel: nil, screenNumber: nil)
         }

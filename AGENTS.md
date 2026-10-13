@@ -123,7 +123,7 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `leanring-buddy/Services/Audio/BuddyAudioConversionSupport.swift` | ~108 | Audio conversion helpers. Converts live mic buffers to PCM16 mono audio and builds WAV payloads for upload-based providers. |
 | `leanring-buddy/Services/Audio/GlobalPushToTalkShortcutMonitor.swift` | ~132 | System-wide push-to-talk monitor. Owns the listen-only `CGEvent` tap and publishes press/release transitions. |
 | `leanring-buddy/Services/Audio/OnboardingAudioPlayer.swift` | ~94 | Manages playback, looping, and timed fade-out of onboarding music (`ff.mp3`). |
-| `leanring-buddy/Services/ScreenCapture/CompanionScreenCaptureUtility.swift` | ~419 | Multi-monitor screenshot capture at native monitor resolution using ScreenCaptureKit and high-precision Apple Vision OCR UI text snapping. Conforms to `ScreenCapturing`. |
+| `leanring-buddy/Services/ScreenCapture/CompanionScreenCaptureUtility.swift` | ~419 | Multi-monitor screenshot capture at native monitor resolution using ScreenCaptureKit and high-precision Apple Vision OCR UI text snapping, conforming target for ScreenCapturing. |
 | `leanring-buddy/Services/SpeechSynthesis/MLXAudioQwenTTSClient.swift` | ~465 | Local on-device TTS client using Qwen3-TTS / Kokoro via `mlx_audio.server` with sentence-by-sentence streaming playback and Apple TTS fallback. Conforms to `TextToSpeechProvider`. |
 | `leanring-buddy/Services/SpeechSynthesis/MLXAudioServerManager.swift` | ~294 | Manages local `mlx_audio.server` lifecycle (spawns child process on demand and terminates on app exit). |
 | `leanring-buddy/Services/SpeechSynthesis/AppleTTSClient.swift` | ~202 | Native macOS Text-to-Speech client conforming to `TextToSpeechProvider`. Used as fallback when the local MLX server is unavailable. |
@@ -136,7 +136,7 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `leanring-buddy/Services/Transcription/AppleSpeechTranscriptionProvider.swift` | ~150 | Local on-device transcription provider backed by Apple's Speech framework. Conforms to `BuddyTranscriptionProvider`. |
 | `leanring-buddy/Services/Transcription/AssemblyAIStreamingTranscriptionProvider.swift` | ~478 | Streaming transcription provider. Fetches temp tokens from Cloudflare Worker, opens AssemblyAI v3 websocket, streams PCM16 audio. Conforms to `BuddyTranscriptionProvider`. |
 | `leanring-buddy/Services/Transcription/OpenAIAudioTranscriptionProvider.swift` | ~317 | Upload-based transcription provider. Buffers push-to-talk audio locally, uploads as WAV on release. Conforms to `BuddyTranscriptionProvider`. |
-| `leanring-buddy/Services/VisionAndAI/OllamaAPI.swift` | ~210 | Local Ollama vision chat API client with NDJSON streaming and `/api/tags` vision model capability discovery. Conforms to `VisionChatService`. |
+| `leanring-buddy/Services/VisionAndAI/OllamaAPI.swift` | ~210 | Local Ollama vision chat API client with NDJSON streaming and `/api/tags` vision model capability discovery, conforming target for VisionChatService. |
 | `leanring-buddy/Services/VisionAndAI/ClaudeAPI.swift` | ~291 | Legacy Claude vision API client with streaming (SSE) and non-streaming modes. |
 | `leanring-buddy/Services/VisionAndAI/OpenAIAPI.swift` | ~142 | OpenAI vision chat client with streaming and non-streaming responses. |
 | `leanring-buddy/Services/VisionAndAI/ElementLocationDetector.swift` | ~335 | Detects UI element locations in screenshots for cursor pointing. |

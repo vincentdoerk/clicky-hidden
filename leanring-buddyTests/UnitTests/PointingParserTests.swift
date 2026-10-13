@@ -184,4 +184,15 @@ struct PointingParserTests {
         #expect(parseResult.coordinate?.y == 200)
         #expect(parseResult.elementLabel == "icon")
     }
+
+    @Test func markdownLinksAreNotParsedAsPointTags() async throws {
+        let responseWithLink = "Bitte klicke auf diesen [Link](https://example.com) oder drücke [Enter]."
+        let parseResult = PointingCoordinateParser.parsePointingCoordinates(from: responseWithLink)
+
+        #expect(parseResult.spokenText == responseWithLink)
+        #expect(parseResult.coordinate == nil)
+        #expect(parseResult.size == nil)
+        #expect(parseResult.elementLabel == nil)
+        #expect(parseResult.screenNumber == nil)
+    }
 }
