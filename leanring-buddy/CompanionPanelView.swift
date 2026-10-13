@@ -600,45 +600,80 @@ struct CompanionPanelView: View {
 
     private var modelPickerRow: some View {
         HStack {
-            Text("Model")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(DS.Colors.textSecondary)
+            HStack(spacing: 6) {
+                Text("Model")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(DS.Colors.textSecondary)
+
+                Button(action: {
+                    Task {
+                        await companionManager.refreshAvailableVisionModels()
+                    }
+                }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(DS.Colors.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Refresh Ollama Vision Models")
+            }
 
             Spacer()
 
-            HStack(spacing: 0) {
-                modelOptionButton(label: "Sonnet", modelID: "claude-sonnet-4-6")
-                modelOptionButton(label: "Opus", modelID: "claude-opus-4-6")
+            if companionManager.availableVisionModels.isEmpty {
+                Text(formatModelDisplayName(companionManager.selectedModel))
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(DS.Colors.textTertiary)
+                    .lineLimit(1)
+            } else {
+                Menu {
+                    ForEach(companionManager.availableVisionModels, id: \.self) { visionModelName in
+                        Button(action: {
+                            companionManager.setSelectedModel(visionModelName)
+                        }) {
+                            HStack {
+                                Text(visionModelName)
+                                if visionModelName == companionManager.selectedModel {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(formatModelDisplayName(companionManager.selectedModel))
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(DS.Colors.textPrimary)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 9))
+                            .foregroundColor(DS.Colors.textTertiary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.white.opacity(0.06))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
+                    )
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .pointerCursor()
             }
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(DS.Colors.borderSubtle, lineWidth: 0.5)
-            )
         }
         .padding(.vertical, 4)
     }
 
-    private func modelOptionButton(label: String, modelID: String) -> some View {
-        let isSelected = companionManager.selectedModel == modelID
-        return Button(action: {
-            companionManager.setSelectedModel(modelID)
-        }) {
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(isSelected ? DS.Colors.textPrimary : DS.Colors.textTertiary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(isSelected ? Color.white.opacity(0.1) : Color.clear)
-                )
+    private func formatModelDisplayName(_ rawModelName: String) -> String {
+        if rawModelName.hasSuffix(":latest") {
+            return String(rawModelName.dropLast(7))
         }
-        .buttonStyle(.plain)
-        .pointerCursor()
+        return rawModelName
     }
 
     // MARK: - DM Farza Button

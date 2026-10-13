@@ -68,20 +68,16 @@ final class CompanionManager: ObservableObject {
     // Response text is now displayed inline on the cursor overlay via
     // streamingResponseText, so no separate response overlay manager is needed.
 
-    /// Base URL for the Cloudflare Worker proxy. All API requests route
-    /// through this so keys never ship in the app binary.
-    private static let workerBaseURL = "https://your-worker-name.your-subdomain.workers.dev"
-
-    private lazy var claudeAPI: ClaudeAPI = {
-        return ClaudeAPI(proxyURL: "\(Self.workerBaseURL)/chat", model: selectedModel)
+    private lazy var ollamaAPI: OllamaAPI = {
+        return OllamaAPI(selectedModelName: selectedModel)
     }()
 
-    private lazy var elevenLabsTTSClient: ElevenLabsTTSClient = {
-        return ElevenLabsTTSClient(proxyURL: "\(Self.workerBaseURL)/tts")
+    private lazy var appleTTSClient: AppleTTSClient = {
+        return AppleTTSClient()
     }()
 
-    /// Conversation history so Claude remembers prior exchanges within a session.
-    /// Each entry is the user's transcript and Claude's response.
+    /// Conversation history so Ollama remembers prior exchanges within a session.
+    /// Each entry is the user's transcript and the assistant's response.
     private var conversationHistory: [(userTranscript: String, assistantResponse: String)] = []
 
     /// The currently running AI response task, if any. Cancelled when the user
@@ -107,13 +103,34 @@ final class CompanionManager: ObservableObject {
     /// Used by the panel to show accurate status text ("Active" vs "Ready").
     @Published private(set) var isOverlayVisible: Bool = false
 
-    /// The Claude model used for voice responses. Persisted to UserDefaults.
-    @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedClaudeModel") ?? "claude-sonnet-4-6"
+    /// The Ollama vision model used for responses. Persisted to UserDefaults.
+    @Published var selectedModel: String = UserDefaults.standard.string(forKey: "selectedOllamaVisionModel") ?? "llama3.2-vision"
 
-    func setSelectedModel(_ model: String) {
-        selectedModel = model
-        UserDefaults.standard.set(model, forKey: "selectedClaudeModel")
-        claudeAPI.model = model
+    /// Installed vision models discovered from Ollama.
+    @Published var availableVisionModels: [String] = []
+
+    func setSelectedModel(_ modelName: String) {
+        selectedModel = modelName
+        UserDefaults.standard.set(modelName, forKey: "selectedOllamaVisionModel")
+        ollamaAPI.selectedModelName = modelName
+    }
+
+    /// Queries Ollama for installed vision models and updates availableVisionModels.
+    func refreshAvailableVisionModels() async {
+        do {
+            let discoveredModels = try await ollamaAPI.fetchAvailableVisionModels()
+            await MainActor.run {
+                self.availableVisionModels = discoveredModels
+                if !discoveredModels.isEmpty && !discoveredModels.contains(self.selectedModel) {
+                    if let firstDiscoveredModel = discoveredModels.first {
+                        self.setSelectedModel(firstDiscoveredModel)
+                    }
+                }
+            }
+            print("🦙 Discovered \(discoveredModels.count) Ollama vision models: \(discoveredModels)")
+        } catch {
+            print("⚠️ Failed to fetch Ollama vision models: \(error)")
+        }
     }
 
     /// User preference for whether the Clicky cursor should be shown.
@@ -179,9 +196,10 @@ final class CompanionManager: ObservableObject {
         bindVoiceStateObservation()
         bindAudioPowerLevel()
         bindShortcutTransitions()
-        // Eagerly touch the Claude API so its TLS warmup handshake completes
-        // well before the onboarding demo fires at ~40s into the video.
-        _ = claudeAPI
+        // Refresh available Ollama vision models on startup
+        Task {
+            await refreshAvailableVisionModels()
+        }
 
         // If the user already completed onboarding AND all permissions are
         // still granted, show the cursor overlay immediately. If permissions
@@ -493,7 +511,7 @@ final class CompanionManager: ObservableObject {
 
             // Cancel any in-progress response and TTS from a previous utterance
             currentResponseTask?.cancel()
-            elevenLabsTTSClient.stopPlayback()
+            appleTTSClient.stopPlayback()
             clearDetectedElementLocation()
 
             // Dismiss the onboarding prompt if it's showing
@@ -585,7 +603,7 @@ final class CompanionManager: ObservableObject {
     /// the buddy to fly to that element on screen.
     private func sendTranscriptToClaudeWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
-        elevenLabsTTSClient.stopPlayback()
+        appleTTSClient.stopPlayback()
 
         currentResponseTask = Task {
             // Stay in processing (spinner) state — no streaming text displayed
@@ -598,19 +616,19 @@ final class CompanionManager: ObservableObject {
                 guard !Task.isCancelled else { return }
 
                 // Build image labels with the actual screenshot pixel dimensions
-                // so Claude's coordinate space matches the image it sees. We
+                // so the AI coordinate space matches the image it sees. We
                 // scale from screenshot pixels to display points ourselves.
                 let labeledImages = screenCaptures.map { capture in
                     let dimensionInfo = " (image dimensions: \(capture.screenshotWidthInPixels)x\(capture.screenshotHeightInPixels) pixels)"
                     return (data: capture.imageData, label: capture.label + dimensionInfo)
                 }
 
-                // Pass conversation history so Claude remembers prior exchanges
+                // Pass conversation history so Ollama remembers prior exchanges
                 let historyForAPI = conversationHistory.map { entry in
                     (userPlaceholder: entry.userTranscript, assistantResponse: entry.assistantResponse)
                 }
 
-                let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
+                let (fullResponseText, _) = try await ollamaAPI.analyzeImageStreaming(
                     images: labeledImages,
                     systemPrompt: Self.companionVoiceResponseSystemPrompt,
                     conversationHistory: historyForAPI,
@@ -701,13 +719,13 @@ final class CompanionManager: ObservableObject {
                 // until the audio actually starts playing, then switch to responding.
                 if !spokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     do {
-                        try await elevenLabsTTSClient.speakText(spokenText)
-                        // speakText returns after player.play() — audio is now playing
+                        try await appleTTSClient.speakText(spokenText)
+                        // speakText returns after playback starts
                         voiceState = .responding
                     } catch {
                         ClickyAnalytics.trackTTSError(error: error.localizedDescription)
-                        print("⚠️ ElevenLabs TTS error: \(error)")
-                        speakCreditsErrorFallback()
+                        print("⚠️ Apple TTS error: \(error)")
+                        speakLocalErrorFallback(errorMessage: "Sorry, I had trouble speaking the response.")
                     }
                 }
             } catch is CancellationError {
@@ -715,7 +733,7 @@ final class CompanionManager: ObservableObject {
             } catch {
                 ClickyAnalytics.trackResponseError(error: error.localizedDescription)
                 print("⚠️ Companion response error: \(error)")
-                speakCreditsErrorFallback()
+                speakLocalErrorFallback(errorMessage: "Ollama is not running or encountered an error. Please make sure Ollama is running.")
             }
 
             if !Task.isCancelled {
@@ -735,7 +753,7 @@ final class CompanionManager: ObservableObject {
         transientHideTask?.cancel()
         transientHideTask = Task {
             // Wait for TTS audio to finish playing
-            while elevenLabsTTSClient.isPlaying {
+            while appleTTSClient.isPlaying {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 guard !Task.isCancelled else { return }
             }
@@ -755,13 +773,10 @@ final class CompanionManager: ObservableObject {
         }
     }
 
-    /// Speaks a hardcoded error message using macOS system TTS when API
-    /// credits run out. Uses NSSpeechSynthesizer so it works even when
-    /// ElevenLabs is down.
-    private func speakCreditsErrorFallback() {
-        let utterance = "I'm all out of credits. Please DM Farza and tell him to bring me back to life."
+    /// Speaks an error message using macOS system TTS when local Ollama or TTS fails.
+    private func speakLocalErrorFallback(errorMessage: String) {
         let synthesizer = NSSpeechSynthesizer()
-        synthesizer.startSpeaking(utterance)
+        synthesizer.startSpeaking(errorMessage)
         voiceState = .responding
     }
 
@@ -982,7 +997,7 @@ final class CompanionManager: ObservableObject {
                 let dimensionInfo = " (image dimensions: \(cursorScreenCapture.screenshotWidthInPixels)x\(cursorScreenCapture.screenshotHeightInPixels) pixels)"
                 let labeledImages = [(data: cursorScreenCapture.imageData, label: cursorScreenCapture.label + dimensionInfo)]
 
-                let (fullResponseText, _) = try await claudeAPI.analyzeImageStreaming(
+                let (fullResponseText, _) = try await ollamaAPI.analyzeImageStreaming(
                     images: labeledImages,
                     systemPrompt: Self.onboardingDemoSystemPrompt,
                     userPrompt: "look around my screen and find something interesting to point at",
