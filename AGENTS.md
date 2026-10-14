@@ -5,7 +5,7 @@
 
 ## Overview
 
-macOS menu bar companion app. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Uses push-to-talk (ctrl+option) to capture voice input, transcribes it locally via Whisper C++ (`large-v3-turbo`) or Apple Speech framework, and sends the transcript + a screenshot of the user's screen to a local Ollama vision model (e.g. llama3.2-vision, qwen2.5-vl, or installed MLX vision models). The model responds with text (streamed via NDJSON) and spoken audio (local Qwen3-TTS via MLX Audio or Apple Speech fallback). A blue cursor overlay can fly to and point at UI elements referenced on any connected monitor.
+macOS menu bar companion app. Lives entirely in the macOS status bar (no dock icon, no main window). Clicking the menu bar icon opens a custom floating panel with companion voice controls. Uses push-to-talk (ctrl+option) to capture voice input, transcribes it locally via Orukeet (sherpa-onnx / Parakeet TDT v3) or Apple Speech framework, and sends the transcript + a screenshot of the user's screen to a local Ollama vision model (e.g. llama3.2-vision, qwen2.5-vl, or installed MLX vision models). The model responds with text (streamed via NDJSON) and spoken audio (local Qwen3-TTS via MLX Audio or Apple Speech fallback). A blue cursor overlay can fly to and point at UI elements referenced on any connected monitor.
 
 Operates 100% locally with zero cloud dependencies or API keys required.
 
@@ -15,7 +15,7 @@ Operates 100% locally with zero cloud dependencies or API keys required.
 - **Framework**: SwiftUI (macOS native) with AppKit bridging for menu bar panel and cursor overlay
 - **Pattern**: Clean Architecture & MVVM with `@StateObject` / `@Published` state management and Coordinator State Machine
 - **AI Chat**: Local Ollama vision LLMs (`http://localhost:11434/api/chat`) via NDJSON streaming with dynamic model discovery (conforming to `VisionChatService`)
-- **Speech-to-Text**: Whisper C++ (`whisper.cpp`) local on-device transcription with `large-v3-turbo` model default (Apple Speech, AssemblyAI, and OpenAI as optional fallbacks conforming to `BuddyTranscriptionProvider`)
+- **Speech-to-Text**: Orukeet (sherpa-onnx / Parakeet TDT v3 INT8) local on-device transcription default (Apple Speech, AssemblyAI, and OpenAI as optional fallbacks conforming to `BuddyTranscriptionProvider`)
 - **Text-to-Speech**: Local Qwen3-TTS via Apple Silicon MLX Audio server (`mlx_audio.server`, 0.6B CustomVoice) with sentence-by-sentence streaming playback and Apple Speech (`AVSpeechSynthesizer`) fallback (conforming to `TextToSpeechProvider`)
 - **Screen Capture**: ScreenCaptureKit (macOS 14.2+), multi-monitor support at native monitor resolution with Apple Vision OCR UI text snapping (conforming to `ScreenCapturing`)
 - **Voice Input**: Push-to-talk via `AVAudioEngine` + pluggable transcription-provider layer. System-wide keyboard shortcut via listen-only CGEvent tap.
@@ -40,7 +40,7 @@ The codebase follows a modular Clean Architecture separating concerns into clear
   - `SpeechSynthesis/`: MLX Audio (Qwen3-TTS/Kokoro), Apple TTS, sentence segmenter, and server process manager.
   - `Storage/`: Persistent user settings storage (`UserDefaultsSettingsStorage`).
   - `System/`: System permissions lifecycle (`PermissionsManager`) and window placement (`WindowPositionManager`).
-  - `Transcription/`: Whisper C++, Apple Speech, AssemblyAI streaming, and OpenAI audio backends.
+  - `Transcription/`: Orukeet (sherpa-onnx / Parakeet TDT v3), Apple Speech, AssemblyAI streaming, and OpenAI audio backends.
   - `VisionAndAI/`: Ollama, Claude, OpenAI vision clients, and UI element detection.
 - `leanring-buddy/UI/`: Decomposed SwiftUI views, components, and AppKit window hosts:
   - `MenuBarPanel/`: Menu bar status item, floating control panel, and decomposed sections (`Header`, `Permissions`, `ModelPicker`, `TTSVoice`, `Footer`).
@@ -111,7 +111,7 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `leanring-buddy/Core/Models/CompanionVoiceState.swift` | ~15 | Enum modeling the voice interaction lifecycle states (`idle`, `listening`, `processing`, `responding`). |
 | `leanring-buddy/Core/Models/PointingDetection.swift` | ~159 | Model and parser for vision model `[POINT:...]` tags (`PointingParseResult`, `PointingCoordinateParser`), bounding box calculation, and candidate keywords for Apple Vision OCR UI snapping. |
 | `leanring-buddy/Core/Models/TTSModelCatalog.swift` | ~148 | Unified catalog of Text-to-Speech models (Qwen3-TTS 0.6B, 1.7B, Kokoro-82M, Apple Speech), preset voices, supported languages, and fallback resolution. |
-| `leanring-buddy/Core/Protocols/BuddyTranscriptionProvider.swift` | ~110 | Protocol surface and provider factory for voice transcription backends (Whisper C++, Apple Speech, AssemblyAI, OpenAI). |
+| `leanring-buddy/Core/Protocols/BuddyTranscriptionProvider.swift` | ~110 | Protocol surface and provider factory for voice transcription backends (Orukeet, Apple Speech, AssemblyAI, OpenAI). |
 | `leanring-buddy/Core/Protocols/PermissionsManaging.swift` | ~21 | Protocol abstraction for checking, polling, and granting macOS system permissions. |
 | `leanring-buddy/Core/Protocols/ScreenCapturing.swift` | ~12 | Protocol abstraction for multi-monitor screenshot capture and OCR text snapping. |
 | `leanring-buddy/Core/Protocols/SettingsStoring.swift` | ~17 | Protocol abstraction for persistent user settings (`UserDefaults` wrapper). |
@@ -124,7 +124,7 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `leanring-buddy/Services/Audio/BuddyDictationManager.swift` | ~845 | Push-to-talk voice pipeline. Handles microphone capture via `AudioEngineCaptureService`, provider-aware permission checks, keyboard/button dictation sessions, transcript finalization, shortcut parsing, contextual keyterms, and live audio metering via `AudioPowerMeter`. |
 | `leanring-buddy/Services/Audio/AudioEngineCaptureService.swift` | ~51 | Low-level microphone capture service wrapping `AVAudioEngine` and input node tap lifecycle. |
 | `leanring-buddy/Services/Audio/AudioPowerMeter.swift` | ~40 | Calculates Root Mean Square (RMS) and normalized power levels from `AVAudioPCMBuffer` for waveform visualizers. |
-| `leanring-buddy/Services/Audio/BuddyAudioConversionSupport.swift` | ~108 | Audio conversion helpers. Converts live mic buffers to PCM16 mono audio and builds WAV payloads for upload-based providers. |
+| `leanring-buddy/Services/Audio/BuddyAudioConversionSupport.swift` | ~108 | Audio conversion helpers. Converts live mic buffers to PCM16 mono audio or Float32 16kHz for Orukeet, and builds WAV payloads. |
 | `leanring-buddy/Services/Audio/GlobalPushToTalkShortcutMonitor.swift` | ~132 | System-wide push-to-talk monitor. Owns the listen-only `CGEvent` tap and publishes press/release transitions. |
 | `leanring-buddy/Services/Audio/OnboardingAudioPlayer.swift` | ~94 | Manages playback, looping, and timed fade-out of onboarding music (`ff.mp3`). |
 | `leanring-buddy/Services/ScreenCapture/CompanionScreenCaptureUtility.swift` | ~419 | Multi-monitor screenshot capture at native monitor resolution using ScreenCaptureKit and high-precision Apple Vision OCR UI text snapping, conforming target for ScreenCapturing. |
@@ -136,7 +136,8 @@ Worker vars: `ELEVENLABS_VOICE_ID`
 | `leanring-buddy/Services/Storage/UserDefaultsSettingsStorage.swift` | ~40 | Thread-safe `UserDefaults` backed implementation of `SettingsStoring`. |
 | `leanring-buddy/Services/System/PermissionsManager.swift` | ~101 | System permissions lifecycle manager conforming to `PermissionsManaging`. Handles checking, timer polling, and persistence for Accessibility, Screen Recording, Microphone, and Screen Content. |
 | `leanring-buddy/Services/System/WindowPositionManager.swift` | ~262 | Window placement logic, Screen Recording permission flow, and accessibility permission helpers. |
-| `leanring-buddy/Services/Transcription/WhisperCPPTranscriptionProvider.swift` | ~219 | Local on-device transcription provider backed by whisper.cpp and `large-v3-turbo` model (active default). Conforms to `BuddyTranscriptionProvider`. |
+| `leanring-buddy/Services/Transcription/OrukeetTranscriptionProvider.swift` | ~229 | Local on-device transcription provider backed by Orukeet (Parakeet TDT v3 via sherpa-onnx) with WebSocket streaming (active default). Conforms to `BuddyTranscriptionProvider`. |
+| `leanring-buddy/Services/Transcription/OrukeetServerManager.swift` | ~138 | Manages local sherpa-onnx Orukeet WebSocket server lifecycle (discovery, health check, spawn, terminate). |
 | `leanring-buddy/Services/Transcription/AppleSpeechTranscriptionProvider.swift` | ~150 | Local on-device transcription provider backed by Apple's Speech framework. Conforms to `BuddyTranscriptionProvider`. |
 | `leanring-buddy/Services/Transcription/AssemblyAIStreamingTranscriptionProvider.swift` | ~478 | Streaming transcription provider. Fetches temp tokens from Cloudflare Worker, opens AssemblyAI v3 websocket, streams PCM16 audio. Conforms to `BuddyTranscriptionProvider`. |
 | `leanring-buddy/Services/Transcription/OpenAIAudioTranscriptionProvider.swift` | ~317 | Upload-based transcription provider. Buffers push-to-talk audio locally, uploads as WAV on release. Conforms to `BuddyTranscriptionProvider`. |

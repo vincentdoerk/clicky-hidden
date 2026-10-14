@@ -134,4 +134,9 @@ struct CoreProtocolsTests {
         session.requestFinalTranscript()
         #expect(finalTranscriptReceived == "Fertiges Transkript")
     }
+
+    @Test func transcriptionProviderFactoryResolvesDefaultProvider() async throws {
+        let provider = BuddyTranscriptionProviderFactory.makeDefaultProvider()
+        #expect(provider.displayName == "Orukeet (Local)" || provider.displayName == "Apple Speech")
+    }
 }
