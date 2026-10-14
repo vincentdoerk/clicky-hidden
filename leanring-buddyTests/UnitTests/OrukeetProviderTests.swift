@@ -62,4 +62,25 @@ struct OrukeetIntegrationTests {
             #expect(exists && isDir.boolValue)
         }
     }
+
+    @Test("Orukeet JSON response decodes text correctly")
+    func testOrukeetJSONDecoding() {
+        let jsonString = """
+        {"lang": "de", "text": "Hallo Antigravity", "timestamps": []}
+        """
+        let data = jsonString.data(using: .utf8)!
+        let decoded = try? JSONDecoder().decode(OrukeetResponsePayload.self, from: data)
+        #expect(decoded?.text == "Hallo Antigravity")
+    }
+
+    @Test("Orukeet framing constructs 8-byte header")
+    func testOrukeetHeaderFraming() {
+        let header = OrukeetTranscriptionSession.buildHeader(sampleRate: 16000, byteLength: 6400)
+        #expect(header.count == 8)
+        let sampleRate = header.prefix(4).withUnsafeBytes { $0.load(as: UInt32.self) }
+        let byteLength = header.suffix(4).withUnsafeBytes { $0.load(as: UInt32.self) }
+        #expect(sampleRate == 16000)
+        #expect(byteLength == 6400)
+    }
 }
+
