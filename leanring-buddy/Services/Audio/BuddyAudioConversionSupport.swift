@@ -69,6 +69,63 @@ final class BuddyPCM16AudioConverter {
     }
 }
 
+final class BuddyFloat32AudioConverter {
+    private let targetSampleRate: Double
+    private let outputFormat: AVAudioFormat?
+    private var cachedConverter: AVAudioConverter?
+    private var cachedInputFormat: AVAudioFormat?
+
+    init(targetSampleRate: Double = 16_000.0) {
+        self.targetSampleRate = targetSampleRate
+        self.outputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: targetSampleRate,
+            channels: 1,
+            interleaved: false
+        )
+    }
+
+    func convertToFloat32Data(from inputBuffer: AVAudioPCMBuffer) -> Data? {
+        guard inputBuffer.frameLength > 0, let outputFormat = outputFormat else { return nil }
+
+        if cachedConverter == nil || cachedInputFormat != inputBuffer.format {
+            cachedInputFormat = inputBuffer.format
+            cachedConverter = AVAudioConverter(from: inputBuffer.format, to: outputFormat)
+        }
+
+        guard let converter = cachedConverter else { return nil }
+
+        let sampleRateRatio = targetSampleRate / inputBuffer.format.sampleRate
+        let estimatedOutputFrames = AVAudioFrameCount((Double(inputBuffer.frameLength) * sampleRateRatio).rounded(.up))
+        guard estimatedOutputFrames > 0,
+              let convertedBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: estimatedOutputFrames) else {
+            return nil
+        }
+
+        var isInputConsumed = false
+        var conversionError: NSError?
+
+        let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
+            if isInputConsumed {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            isInputConsumed = true
+            outStatus.pointee = .haveData
+            return inputBuffer
+        }
+
+        let status = converter.convert(to: convertedBuffer, error: &conversionError, withInputFrom: inputBlock)
+        guard status != .error, conversionError == nil, convertedBuffer.frameLength > 0 else {
+            return nil
+        }
+
+        guard let channelData = convertedBuffer.floatChannelData else { return nil }
+        let byteCount = Int(convertedBuffer.frameLength) * MemoryLayout<Float>.size
+        return Data(bytes: channelData[0], count: byteCount)
+    }
+}
+
 enum BuddyWAVFileBuilder {
     static func buildWAVData(
         fromPCM16MonoAudio pcm16AudioData: Data,
