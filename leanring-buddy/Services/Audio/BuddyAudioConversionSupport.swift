@@ -96,7 +96,7 @@ final class BuddyFloat32AudioConverter {
         guard let converter = cachedConverter else { return nil }
 
         let sampleRateRatio = targetSampleRate / inputBuffer.format.sampleRate
-        let estimatedOutputFrames = AVAudioFrameCount((Double(inputBuffer.frameLength) * sampleRateRatio).rounded(.up))
+        let estimatedOutputFrames = AVAudioFrameCount((Double(inputBuffer.frameLength) * sampleRateRatio).rounded(.up)) + 32
         guard estimatedOutputFrames > 0,
               let convertedBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: estimatedOutputFrames) else {
             return nil

@@ -143,8 +143,7 @@ final class OrukeetTranscriptionSession: BuddyStreamingTranscriptionSession, @un
             return
         }
 
-        let session = URLSession(configuration: .default)
-        let wsTask = session.webSocketTask(with: url)
+        let wsTask = URLSession.shared.webSocketTask(with: url)
 
         let cancelled = syncQueue.sync { () -> Bool in
             if isCancelled { return true }

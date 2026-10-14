@@ -90,7 +90,7 @@ final class OrukeetServerManager: @unchecked Sendable {
             return false
         }
 
-        return stateQueue.sync {
+        let launched = stateQueue.sync { () -> Bool in
             if let proc = executionProcess, proc.isRunning {
                 return true
             }
@@ -118,13 +118,24 @@ final class OrukeetServerManager: @unchecked Sendable {
                 self.executionProcess = process
                 self.ownsProcess = true
                 print("🎙️ Orukeet: Spawning server on port \(port)...")
-                Thread.sleep(forTimeInterval: 0.5)
                 return true
             } catch {
                 print("❌ Orukeet: Failed to spawn server: \(error)")
                 return false
             }
         }
+
+        guard launched else { return false }
+
+        // Poll server readiness asynchronously up to 3 seconds
+        let maxAttempts = 30
+        for _ in 0..<maxAttempts {
+            if await checkServerHealth() {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return false
     }
 
     func terminateServer() {
