@@ -91,9 +91,11 @@ final class OrukeetServerManager: @unchecked Sendable {
         }
 
         return stateQueue.sync {
-            if executionProcess != nil {
+            if let proc = executionProcess, proc.isRunning {
                 return true
             }
+            executionProcess = nil
+            ownsProcess = false
 
             let process = Process()
             process.executableURL = URL(fileURLWithPath: binary)
@@ -108,8 +110,8 @@ final class OrukeetServerManager: @unchecked Sendable {
                 "--num-work-threads=3"
             ]
 
-            process.standardOutput = Pipe()
-            process.standardError = Pipe()
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
 
             do {
                 try process.run()

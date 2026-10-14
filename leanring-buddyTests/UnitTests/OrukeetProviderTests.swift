@@ -51,5 +51,15 @@ struct OrukeetIntegrationTests {
     func testServerManagerPaths() {
         let manager = OrukeetServerManager.shared
         #expect(manager.port == 6006)
+
+        if let binaryPath = OrukeetServerManager.binaryPath {
+            #expect(FileManager.default.isExecutableFile(atPath: binaryPath))
+        }
+
+        if let modelDir = OrukeetServerManager.modelDirectoryURL {
+            var isDir: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: modelDir.path, isDirectory: &isDir)
+            #expect(exists && isDir.boolValue)
+        }
     }
 }
