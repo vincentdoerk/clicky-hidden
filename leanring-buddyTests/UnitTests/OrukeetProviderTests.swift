@@ -46,4 +46,10 @@ struct OrukeetIntegrationTests {
         #expect(data != nil)
         #expect(data?.count == 1600 * 4)
     }
+
+    @Test("OrukeetServerManager discovers candidate paths")
+    func testServerManagerPaths() {
+        let manager = OrukeetServerManager.shared
+        #expect(manager.port == 6006)
+    }
 }
