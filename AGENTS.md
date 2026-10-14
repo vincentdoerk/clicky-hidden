@@ -50,6 +50,10 @@ The codebase follows a modular Clean Architecture separating concerns into clear
 - `leanring-buddyTests/`:
   - `Mocks/`: In-memory test doubles implementing core protocols.
   - `UnitTests/`: Swift Testing suites testing state machine, protocols, audio metering, sentence segmenter, pointing parser, permissions, and TTS catalog.
+- `docs/architecture/`: Comprehensive UML and sequence documentation:
+  - `index.html`: Standalone interactive web viewer (Mermaid.js) with pan/zoom, search, and SVG export.
+  - `uml-class-diagram.md`: Complete UML class diagram covering Core Protocols, Models, State, Services, and UI.
+  - `sequence-diagrams.md`: Detailed sequence diagrams for all 5 data pipelines (PTT, STT, Vision/TTS, Pointing/OCR, Barge-In).
 
 ### State Machine & Coordinator Pattern
 
