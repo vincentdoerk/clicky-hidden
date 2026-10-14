@@ -8,4 +8,4 @@
 import Foundation
 
 /// Backward-compatibility typealias for `CompanionCoordinator`.
-public typealias CompanionManager = CompanionCoordinator
+typealias CompanionManager = CompanionCoordinator

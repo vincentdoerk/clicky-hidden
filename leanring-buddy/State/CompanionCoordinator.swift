@@ -15,53 +15,53 @@ import ScreenCaptureKit
 import SwiftUI
 
 @MainActor
-open class CompanionCoordinator: ObservableObject {
+class CompanionCoordinator: ObservableObject {
 
     // MARK: - Published UI & Coordination State
 
-    @Published public internal(set) var voiceState: CompanionVoiceState = .idle
-    @Published public internal(set) var lastTranscript: String?
-    @Published public internal(set) var currentAudioPowerLevel: CGFloat = 0
-    @Published public internal(set) var processingStepText: String = ""
+    @Published internal(set) var voiceState: CompanionVoiceState = .idle
+    @Published internal(set) var lastTranscript: String?
+    @Published internal(set) var currentAudioPowerLevel: CGFloat = 0
+    @Published internal(set) var processingStepText: String = ""
 
-    @Published public internal(set) var hasAccessibilityPermission: Bool = false
-    @Published public internal(set) var hasScreenRecordingPermission: Bool = false
-    @Published public internal(set) var hasMicrophonePermission: Bool = false
-    @Published public internal(set) var hasScreenContentPermission: Bool = false
-    @Published public internal(set) var isRequestingScreenContent: Bool = false
+    @Published internal(set) var hasAccessibilityPermission: Bool = false
+    @Published internal(set) var hasScreenRecordingPermission: Bool = false
+    @Published internal(set) var hasMicrophonePermission: Bool = false
+    @Published internal(set) var hasScreenContentPermission: Bool = false
+    @Published internal(set) var isRequestingScreenContent: Bool = false
 
-    @Published public var detectedElementScreenLocation: CGPoint?
-    @Published public var detectedElementDisplayFrame: CGRect?
-    @Published public var detectedElementBubbleText: String?
-    @Published public var detectedElementHighlightSize: CGSize?
+    @Published var detectedElementScreenLocation: CGPoint?
+    @Published var detectedElementDisplayFrame: CGRect?
+    @Published var detectedElementBubbleText: String?
+    @Published var detectedElementHighlightSize: CGSize?
 
-    @Published public internal(set) var isOverlayVisible: Bool = false
-    @Published public var isClickyCursorEnabled: Bool = false
-    @Published public var selectedModel: String = "llama3.2-vision"
-    @Published public var availableVisionModels: [String] = []
+    @Published internal(set) var isOverlayVisible: Bool = false
+    @Published var isClickyCursorEnabled: Bool = false
+    @Published var selectedModel: String = "llama3.2-vision"
+    @Published var availableVisionModels: [String] = []
 
-    @Published public var selectedTTSModelId: String = TTSModelCatalog.defaultModelId
-    @Published public var selectedTTSLanguageCode: String = "German"
-    @Published public var selectedVoice: String = "Seraphina"
-    @Published public var isPlayingVoicePreview: Bool = false
-    @Published public var speechRateMultiplier: Double = 1.0
+    @Published var selectedTTSModelId: String = TTSModelCatalog.defaultModelId
+    @Published var selectedTTSLanguageCode: String = "German"
+    @Published var selectedVoice: String = "Seraphina"
+    @Published var isPlayingVoicePreview: Bool = false
+    @Published var speechRateMultiplier: Double = 1.0
 
-    @Published public var onboardingPromptText: String = ""
-    @Published public var onboardingPromptOpacity: Double = 0.0
-    @Published public var showOnboardingPrompt: Bool = false
-    @Published public var hasSubmittedEmail: Bool = false
+    @Published var onboardingPromptText: String = ""
+    @Published var onboardingPromptOpacity: Double = 0.0
+    @Published var showOnboardingPrompt: Bool = false
+    @Published var hasSubmittedEmail: Bool = false
 
     // MARK: - Dependencies
 
-    public let permissionsManager: any PermissionsManaging
-    public let settingsStorage: any SettingsStoring
-    public let onboardingAudioPlayer: OnboardingAudioPlayer
-    public let onboardingLeadService: OnboardingLeadService
-    public let buddyDictationManager: BuddyDictationManager
-    public let globalPushToTalkShortcutMonitor: GlobalPushToTalkShortcutMonitor
-    public let overlayWindowManager: OverlayWindowManager
-    public let textToSpeechProvider: any TextToSpeechProvider
-    public let ollamaAPI: OllamaAPI
+    let permissionsManager: any PermissionsManaging
+    let settingsStorage: any SettingsStoring
+    let onboardingAudioPlayer: OnboardingAudioPlayer
+    let onboardingLeadService: OnboardingLeadService
+    let buddyDictationManager: BuddyDictationManager
+    let globalPushToTalkShortcutMonitor: GlobalPushToTalkShortcutMonitor
+    let overlayWindowManager: OverlayWindowManager
+    let textToSpeechProvider: any TextToSpeechProvider
+    let ollamaAPI: OllamaAPI
 
     // MARK: - Internal Tasks & Subscriptions
 
@@ -77,36 +77,36 @@ open class CompanionCoordinator: ObservableObject {
 
     // MARK: - Computed Properties
 
-    public var allPermissionsGranted: Bool {
+    var allPermissionsGranted: Bool {
         permissionsManager.allPermissionsGranted
     }
 
-    public var availableTTSModels: [TTSModelOption] {
+    var availableTTSModels: [TTSModelOption] {
         TTSModelCatalog.allModels
     }
 
-    public var currentTTSModel: TTSModelOption {
+    var currentTTSModel: TTSModelOption {
         TTSModelCatalog.model(withId: selectedTTSModelId)
     }
 
-    public var availableLanguagesForCurrentModel: [TTSLanguageOption] {
+    var availableLanguagesForCurrentModel: [TTSLanguageOption] {
         currentTTSModel.supportedLanguages
     }
 
-    public var availableVoices: [String] {
+    var availableVoices: [String] {
         currentTTSModel.availableVoices
     }
 
-    public var availableSpeechRates: [Double] {
+    var availableSpeechRates: [Double] {
         [0.85, 1.0, 1.1, 1.2, 1.25, 1.4, 1.5]
     }
 
-    public var hasCompletedOnboarding: Bool {
+    var hasCompletedOnboarding: Bool {
         get { settingsStorage.bool(forKey: "hasCompletedOnboarding") }
         set { settingsStorage.set(newValue, forKey: "hasCompletedOnboarding") }
     }
 
-    public var hasActiveUserInteractionOrBackgroundProcess: Bool {
+    var hasActiveUserInteractionOrBackgroundProcess: Bool {
         globalPushToTalkShortcutMonitor.isShortcutCurrentlyPressed
             || buddyDictationManager.isDictationInProgress
             || buddyDictationManager.isActivelyRecordingAudio
@@ -121,17 +121,25 @@ open class CompanionCoordinator: ObservableObject {
 
     // MARK: - Initialization
 
-    public init(
-        permissionsManager: any PermissionsManaging = PermissionsManager(),
-        settingsStorage: any SettingsStoring = UserDefaultsSettingsStorage(),
-        onboardingAudioPlayer: OnboardingAudioPlayer = OnboardingAudioPlayer(),
-        onboardingLeadService: OnboardingLeadService = OnboardingLeadService(),
-        buddyDictationManager: BuddyDictationManager = BuddyDictationManager(),
-        globalPushToTalkShortcutMonitor: GlobalPushToTalkShortcutMonitor = GlobalPushToTalkShortcutMonitor(),
-        overlayWindowManager: OverlayWindowManager = OverlayWindowManager(),
+    init(
+        permissionsManager: (any PermissionsManaging)? = nil,
+        settingsStorage: (any SettingsStoring)? = nil,
+        onboardingAudioPlayer: OnboardingAudioPlayer? = nil,
+        onboardingLeadService: OnboardingLeadService? = nil,
+        buddyDictationManager: BuddyDictationManager? = nil,
+        globalPushToTalkShortcutMonitor: GlobalPushToTalkShortcutMonitor? = nil,
+        overlayWindowManager: OverlayWindowManager? = nil,
         textToSpeechProvider: (any TextToSpeechProvider)? = nil,
         ollamaAPI: OllamaAPI? = nil
     ) {
+        let settingsStorage = settingsStorage ?? UserDefaultsSettingsStorage()
+        let permissionsManager = permissionsManager ?? PermissionsManager(settingsStorage: settingsStorage)
+        let onboardingAudioPlayer = onboardingAudioPlayer ?? OnboardingAudioPlayer()
+        let onboardingLeadService = onboardingLeadService ?? OnboardingLeadService()
+        let buddyDictationManager = buddyDictationManager ?? BuddyDictationManager()
+        let globalPushToTalkShortcutMonitor = globalPushToTalkShortcutMonitor ?? GlobalPushToTalkShortcutMonitor()
+        let overlayWindowManager = overlayWindowManager ?? OverlayWindowManager()
+
         self.permissionsManager = permissionsManager
         self.settingsStorage = settingsStorage
         self.onboardingAudioPlayer = onboardingAudioPlayer
@@ -177,7 +185,7 @@ open class CompanionCoordinator: ObservableObject {
 
     /// Simulates user beginning speech input (e.g. push-to-talk keydown).
     /// Cancels any in-progress response task and stops ongoing audio playback (barge-in).
-    public func simulateStartListening() {
+    func simulateStartListening() {
         currentResponseTask?.cancel()
         currentResponseTask = nil
         textToSpeechProvider.stopPlayback()
@@ -189,32 +197,32 @@ open class CompanionCoordinator: ObservableObject {
     }
 
     /// Simulates speech synthesis / buddy responding.
-    public func simulateStartResponding() {
+    func simulateStartResponding() {
         voiceState = .responding
         processingStepText = ""
     }
 
     /// Simulates transition to processing state with an optional descriptive status.
-    public func simulateStartProcessing(stepText: String = "Audio verarbeiten...") {
+    func simulateStartProcessing(stepText: String = "Audio verarbeiten...") {
         voiceState = .processing
         processingStepText = stepText
     }
 
     /// Directly transitions coordinator voice state.
-    public func simulateTransition(to newState: CompanionVoiceState) {
+    func simulateTransition(to newState: CompanionVoiceState) {
         voiceState = newState
         if newState == .idle {
             processingStepText = ""
         }
     }
 
-    public func setProcessingStepText(_ text: String) {
+    func setProcessingStepText(_ text: String) {
         self.processingStepText = text
     }
 
     // MARK: - Lifecycle & Observation Bindings
 
-    public func start() {
+    func start() {
         refreshAllPermissions()
         print("🔑 Clicky start — accessibility: \(hasAccessibilityPermission), screen: \(hasScreenRecordingPermission), mic: \(hasMicrophonePermission), screenContent: \(hasScreenContentPermission), onboarded: \(hasCompletedOnboarding)")
 
@@ -242,7 +250,7 @@ open class CompanionCoordinator: ObservableObject {
         }
     }
 
-    public func stop() {
+    func stop() {
         permissionsManager.stopPolling()
         onboardingAudioPlayer.stopOnboardingMusic()
         globalPushToTalkShortcutMonitor.stop()
@@ -439,7 +447,7 @@ open class CompanionCoordinator: ObservableObject {
     - element is on screen 2: "das terminal ist drüben auf deinem zweiten monitor. [POINT:450,320:200,80:terminal:screen2]"
     """
 
-    public func sendTranscriptToVisionModelWithScreenshot(transcript: String) {
+    func sendTranscriptToVisionModelWithScreenshot(transcript: String) {
         currentResponseTask?.cancel()
         textToSpeechProvider.stopPlayback()
 
@@ -645,7 +653,7 @@ open class CompanionCoordinator: ObservableObject {
     }
 
     /// Backwards-compatibility alias forwarding to `sendTranscriptToVisionModelWithScreenshot(transcript:)`.
-    public func sendTranscriptToClaudeWithScreenshot(transcript: String) {
+    func sendTranscriptToClaudeWithScreenshot(transcript: String) {
         sendTranscriptToVisionModelWithScreenshot(transcript: transcript)
     }
 
@@ -666,7 +674,7 @@ open class CompanionCoordinator: ObservableObject {
 
     // MARK: - Transient Overlay Management
 
-    public func clearDetectedElementLocation() {
+    func clearDetectedElementLocation() {
         detectedElementScreenLocation = nil
         detectedElementHighlightSize = nil
         detectedElementDisplayFrame = nil
@@ -719,7 +727,7 @@ open class CompanionCoordinator: ObservableObject {
 
     // MARK: - TTS & Voice Preferences
 
-    public func setSelectedTTSModel(_ modelId: String) {
+    func setSelectedTTSModel(_ modelId: String) {
         selectedTTSModelId = modelId
         settingsStorage.set(modelId, forKey: "selectedTTSModelId")
 
@@ -741,21 +749,21 @@ open class CompanionCoordinator: ObservableObject {
         print("🔊 Text-to-speech: model switched to '\(modelOption.displayName)'")
     }
 
-    public func setSelectedTTSLanguage(_ languageCode: String) {
+    func setSelectedTTSLanguage(_ languageCode: String) {
         selectedTTSLanguageCode = languageCode
         settingsStorage.set(languageCode, forKey: "selectedTTSLanguageCode")
         textToSpeechProvider.setLanguageCode(languageCode)
         print("🔊 Text-to-speech: language switched to '\(languageCode)'")
     }
 
-    public func setSelectedVoice(_ voiceName: String) {
+    func setSelectedVoice(_ voiceName: String) {
         selectedVoice = voiceName
         settingsStorage.set(voiceName, forKey: "selectedTTSVoice")
         textToSpeechProvider.setVoiceName(voiceName)
         print("🔊 Text-to-speech: voice switched to '\(voiceName)'")
     }
 
-    public func playVoicePreview(for voiceName: String? = nil) {
+    func playVoicePreview(for voiceName: String? = nil) {
         if isPlayingVoicePreview {
             stopVoicePreview()
         }
@@ -789,12 +797,12 @@ open class CompanionCoordinator: ObservableObject {
         )
     }
 
-    public func stopVoicePreview() {
+    func stopVoicePreview() {
         textToSpeechProvider.stopPlayback()
         isPlayingVoicePreview = false
     }
 
-    public func setSpeechRateMultiplier(_ rateMultiplier: Double) {
+    func setSpeechRateMultiplier(_ rateMultiplier: Double) {
         speechRateMultiplier = rateMultiplier
         settingsStorage.set(rateMultiplier, forKey: "selectedTTSSpeechRate")
         textToSpeechProvider.setSpeechRateMultiplier(rateMultiplier)
@@ -802,13 +810,13 @@ open class CompanionCoordinator: ObservableObject {
 
     // MARK: - VLM Model Preferences
 
-    public func setSelectedModel(_ modelName: String) {
+    func setSelectedModel(_ modelName: String) {
         selectedModel = modelName
         settingsStorage.set(modelName, forKey: "selectedOllamaVisionModel")
         ollamaAPI.selectedModelName = modelName
     }
 
-    public func refreshAvailableVisionModels() async {
+    func refreshAvailableVisionModels() async {
         do {
             let discoveredModels = try await ollamaAPI.fetchAvailableVisionModels()
             await MainActor.run {
@@ -825,7 +833,7 @@ open class CompanionCoordinator: ObservableObject {
         }
     }
 
-    public func setClickyCursorEnabled(_ enabled: Bool) {
+    func setClickyCursorEnabled(_ enabled: Bool) {
         isClickyCursorEnabled = enabled
         settingsStorage.set(enabled, forKey: "isClickyCursorEnabled")
         transientHideTask?.cancel()
@@ -841,7 +849,7 @@ open class CompanionCoordinator: ObservableObject {
         }
     }
 
-    public func submitEmail(_ email: String) {
+    func submitEmail(_ email: String) {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedEmail.isEmpty else { return }
 
@@ -852,7 +860,7 @@ open class CompanionCoordinator: ObservableObject {
 
     // MARK: - System Permissions & Onboarding
 
-    public func refreshAllPermissions() {
+    func refreshAllPermissions() {
         let previouslyHadAccessibility = hasAccessibilityPermission
         let previouslyHadScreenRecording = hasScreenRecordingPermission
         let previouslyHadMicrophone = hasMicrophonePermission
@@ -892,7 +900,7 @@ open class CompanionCoordinator: ObservableObject {
         }
     }
 
-    public func requestScreenContentPermission() {
+    func requestScreenContentPermission() {
         guard !isRequestingScreenContent else { return }
         isRequestingScreenContent = true
         Task {
@@ -929,7 +937,7 @@ open class CompanionCoordinator: ObservableObject {
         }
     }
 
-    public func triggerOnboarding() {
+    func triggerOnboarding() {
         NotificationCenter.default.post(name: .clickyDismissPanel, object: nil)
         hasCompletedOnboarding = true
         ClickyAnalytics.trackOnboardingStarted()
@@ -954,7 +962,7 @@ open class CompanionCoordinator: ObservableObject {
     the screenshot images are labeled with their pixel dimensions. use those dimensions as the coordinate space. origin (0,0) is top-left. x increases rightward, y increases downward.
     """
 
-    public func performOnboardingDemoInteraction() {
+    func performOnboardingDemoInteraction() {
         guard voiceState == .idle || voiceState == .responding else { return }
 
         Task {
@@ -1010,13 +1018,11 @@ open class CompanionCoordinator: ObservableObject {
 
     // MARK: - Static Pointing Helpers
 
-    public typealias PointingParseResult = leanring_buddy.PointingParseResult
-
-    public static func parsePointingCoordinates(from responseText: String) -> PointingParseResult {
+    static func parsePointingCoordinates(from responseText: String) -> PointingParseResult {
         PointingCoordinateParser.parsePointingCoordinates(from: responseText)
     }
 
-    public static func buildCandidateKeywords(label: String?) -> [String] {
+    static func buildCandidateKeywords(label: String?) -> [String] {
         PointingCoordinateParser.buildCandidateKeywords(label: label)
     }
 }

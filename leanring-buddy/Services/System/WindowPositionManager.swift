@@ -32,7 +32,7 @@ class WindowPositionManager {
     // MARK: - Accessibility Permission
 
     /// Returns true if the app has Accessibility permission.
-    static func hasAccessibilityPermission() -> Bool {
+    nonisolated static func hasAccessibilityPermission() -> Bool {
         AXIsProcessTrusted()
     }
 
@@ -76,7 +76,7 @@ class WindowPositionManager {
     // MARK: - Screen Recording Permission
 
     /// Returns true if Screen Recording permission is granted.
-    static func hasScreenRecordingPermission() -> Bool {
+    nonisolated static func hasScreenRecordingPermission() -> Bool {
         let hasScreenRecordingPermissionNow = CGPreflightScreenCaptureAccess()
         if hasScreenRecordingPermissionNow {
             UserDefaults.standard.set(true, forKey: hasPreviouslyConfirmedScreenRecordingPermissionUserDefaultsKey)

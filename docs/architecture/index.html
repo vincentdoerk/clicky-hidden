@@ -1,0 +1,1697 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clicky macOS Companion — Interaktiver Architektur- & Sequenz-Viewer</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%233b82f6'><polygon points='3 3 21 11 12 13 8 21 3 3'/></svg>">
+  
+  <!-- Mermaid.js via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+
+  <style>
+    :root {
+      --bg-base: #070a11;
+      --bg-surface: #0d121f;
+      --bg-card: rgba(18, 25, 41, 0.75);
+      --bg-card-hover: rgba(28, 38, 62, 0.85);
+      --bg-glass: rgba(13, 18, 31, 0.82);
+      
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-medium: rgba(255, 255, 255, 0.14);
+      --border-accent: rgba(59, 130, 246, 0.4);
+      
+      --accent-blue: #3b82f6;
+      --accent-blue-hover: #60a5fa;
+      --accent-cyan: #06b6d4;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-purple: #8b5cf6;
+      --accent-glow: rgba(59, 130, 246, 0.25);
+      
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      
+      --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
+      --font-mono: "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+      
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 14px;
+      --radius-xl: 18px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font-ui);
+      background-color: var(--bg-base);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* macOS Titlebar Chrome */
+    .titlebar {
+      height: 44px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      user-select: none;
+      z-index: 100;
+      backdrop-filter: blur(20px);
+    }
+
+    .traffic-lights {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .traffic-light {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .traffic-red { background: #ff5f56; border: 1px solid #e0443e; }
+    .traffic-yellow { background: #ffbd2e; border: 1px solid #dea123; }
+    .traffic-green { background: #27c93f; border: 1px solid #1aab29; }
+
+    .titlebar-center {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+
+    .titlebar-center .app-name {
+      color: var(--text-main);
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .titlebar-center .app-logo {
+      width: 16px;
+      height: 16px;
+      fill: var(--accent-blue);
+      filter: drop-shadow(0 0 6px var(--accent-blue));
+    }
+
+    .titlebar-tags {
+      display: flex;
+      gap: 6px;
+    }
+
+    .badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 12px;
+      letter-spacing: 0.3px;
+    }
+
+    .badge-blue { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+    .badge-green { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-purple { background: rgba(139, 92, 246, 0.15); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.3); }
+
+    /* Main Container Layout */
+    .app-workspace {
+      display: flex;
+      flex: 1;
+      height: calc(100vh - 44px);
+      position: relative;
+    }
+
+    /* Sidebar Navigation */
+    .sidebar {
+      width: 330px;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      overflow-y: auto;
+      z-index: 50;
+      transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .sidebar-search-box {
+      padding: 14px 14px 8px 14px;
+      position: sticky;
+      top: 0;
+      background: var(--bg-surface);
+      z-index: 20;
+    }
+
+    .search-input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .search-input-wrapper svg {
+      position: absolute;
+      left: 10px;
+      width: 14px;
+      height: 14px;
+      fill: var(--text-dim);
+      pointer-events: none;
+    }
+
+    .search-input {
+      width: 100%;
+      height: 32px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 0 32px 0 32px;
+      color: var(--text-main);
+      font-size: 12.5px;
+      outline: none;
+      transition: all 0.2s ease;
+    }
+
+    .search-input:focus {
+      background: rgba(255, 255, 255, 0.09);
+      border-color: var(--accent-blue);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    .search-kbd {
+      position: absolute;
+      right: 8px;
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text-dim);
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+
+    .sidebar-section-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-dim);
+      padding: 16px 16px 6px 16px;
+    }
+
+    .nav-list {
+      list-style: none;
+      padding: 0 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border-radius: var(--radius-md);
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.15s ease;
+      user-select: none;
+      position: relative;
+    }
+
+    .nav-item:hover {
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-main);
+    }
+
+    .nav-item.active {
+      background: rgba(59, 130, 246, 0.15);
+      color: #93c5fd;
+      font-weight: 600;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      box-shadow: 0 2px 10px rgba(59, 130, 246, 0.12);
+    }
+
+    .nav-item.active::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 6px;
+      bottom: 6px;
+      width: 3px;
+      background: var(--accent-blue);
+      border-radius: 0 2px 2px 0;
+      box-shadow: 0 0 8px var(--accent-blue);
+    }
+
+    .nav-icon {
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+    }
+
+    .nav-text {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .nav-shortcut {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text-dim);
+      background: rgba(255, 255, 255, 0.04);
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 16px;
+      border-top: 1px solid var(--border-subtle);
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .tech-metric-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11.5px;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+    }
+
+    .tech-metric-row span:last-child {
+      color: var(--text-muted);
+      font-weight: 600;
+      font-family: var(--font-mono);
+    }
+
+    /* Content Area */
+    .main-stage {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg-base);
+      position: relative;
+    }
+
+    /* Diagram Header & Toolbar */
+    .stage-header {
+      background: var(--bg-glass);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      backdrop-filter: blur(20px);
+      z-index: 30;
+      flex-shrink: 0;
+    }
+
+    .stage-title-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .stage-title-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .stage-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-main);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .stage-desc {
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+
+    .toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-tool {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      height: 32px;
+      padding: 0 10px;
+      border-radius: var(--radius-md);
+      font-size: 12px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.15s ease;
+      font-family: var(--font-ui);
+    }
+
+    .btn-tool:hover {
+      background: rgba(255, 255, 255, 0.12);
+      color: var(--text-main);
+      border-color: var(--border-medium);
+    }
+
+    .btn-tool:active {
+      transform: scale(0.97);
+    }
+
+    .btn-tool.active {
+      background: rgba(59, 130, 246, 0.2);
+      border-color: var(--accent-blue);
+      color: #93c5fd;
+    }
+
+    .btn-tool svg {
+      width: 14px;
+      height: 14px;
+      fill: currentColor;
+    }
+
+    .tool-separator {
+      width: 1px;
+      height: 20px;
+      background: var(--border-subtle);
+      margin: 0 3px;
+    }
+
+    /* Diagram Viewport & Pan-Zoom Canvas */
+    .viewport-outer {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+      background-color: #070a12;
+      background-image: 
+        radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+        radial-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px);
+      background-size: 24px 24px;
+      background-position: 0 0, 12px 12px;
+    }
+
+    .viewport {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      position: relative;
+      cursor: grab;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .viewport.grabbing {
+      cursor: grabbing;
+    }
+
+    .diagram-canvas {
+      position: absolute;
+      transform-origin: 0 0;
+      will-change: transform;
+      padding: 60px;
+      display: inline-block;
+    }
+
+    .diagram-canvas svg {
+      display: block;
+      filter: drop-shadow(0 8px 30px rgba(0, 0, 0, 0.6));
+    }
+
+    /* Floating Canvas Controls (Overlay) */
+    .canvas-hud {
+      position: absolute;
+      bottom: 18px;
+      right: 18px;
+      background: var(--bg-glass);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+      z-index: 25;
+    }
+
+    .hud-btn {
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .hud-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text-main);
+    }
+
+    .hud-scale-label {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      font-weight: 600;
+      color: var(--text-muted);
+      padding: 0 8px;
+      min-width: 48px;
+      text-align: center;
+    }
+
+    /* Collapsible Code Drawer */
+    .code-drawer {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+      background: #060911;
+      border-top: 1px solid var(--border-subtle);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .code-drawer.open {
+      max-height: 320px;
+    }
+
+    .code-drawer-header {
+      padding: 10px 16px;
+      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .code-pre {
+      padding: 16px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.6;
+      color: #93c5fd;
+      overflow: auto;
+      background: #060911;
+      white-space: pre;
+    }
+
+    /* Bottom Architecture Explanations & Notes */
+    .architecture-notes-card {
+      border-top: 1px solid var(--border-subtle);
+      background: var(--bg-surface);
+      padding: 18px 24px;
+      max-height: 240px;
+      overflow-y: auto;
+      flex-shrink: 0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .note-column h4 {
+      font-size: 12.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-main);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .note-column p, .note-column li {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.55;
+    }
+
+    .note-column ul {
+      padding-left: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .code-tag {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #60a5fa;
+      padding: 1px 5px;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    /* Loading Spinner */
+    .loading-overlay {
+      position: absolute;
+      inset: 0;
+      background: var(--bg-base);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      z-index: 200;
+      transition: opacity 0.3s ease;
+    }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(59, 130, 246, 0.2);
+      border-top-color: var(--accent-blue);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Toast Notification */
+    .toast-container {
+      position: fixed;
+      top: 56px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-20px);
+      background: rgba(18, 25, 41, 0.95);
+      border: 1px solid var(--accent-blue);
+      color: #e2e8f0;
+      padding: 9px 18px;
+      border-radius: var(--radius-lg);
+      font-size: 12.5px;
+      font-weight: 500;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5), 0 0 15px rgba(59, 130, 246, 0.3);
+      backdrop-filter: blur(16px);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 1000;
+    }
+
+    .toast-container.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* Custom Mermaid SVG styling tweaks */
+    .diagram-canvas svg {
+      max-width: none !important;
+    }
+
+    /* Scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- macOS Window Titlebar -->
+  <header class="titlebar">
+    <div class="traffic-lights">
+      <span class="traffic-light traffic-red"></span>
+      <span class="traffic-light traffic-yellow"></span>
+      <span class="traffic-light traffic-green"></span>
+    </div>
+
+    <div class="titlebar-center">
+      <div class="app-name">
+        <svg class="app-logo" viewBox="0 0 24 24"><polygon points="3 3 21 11 12 13 8 21 3 3"/></svg>
+        Clicky macOS Companion
+      </div>
+      <span>&bull;</span>
+      <span>Systemarchitektur &amp; Sequenz-Viewer</span>
+    </div>
+
+    <div class="titlebar-tags">
+      <span class="badge badge-blue">Swift 6 Clean Architecture</span>
+      <span class="badge badge-green">100% On-Device</span>
+      <span class="badge badge-purple">Mermaid.js SVG</span>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <div class="app-workspace">
+
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-search-box">
+        <div class="search-input-wrapper">
+          <svg viewBox="0 0 24 24"><path d="M10 18a7.952 7.952 0 0 0 4.897-1.688l4.396 4.396 1.414-1.414-4.396-4.396A7.952 7.952 0 0 0 18 10c0-4.411-3.589-8-8-8s-8 3.589-8 8 3.589 8 8 8zm0-14c3.309 0 6 2.691 6 6s-2.691 6-6 6-6-2.691-6-6 2.691-6 6-6z"/></svg>
+          <input type="text" id="searchInput" class="search-input" placeholder="Diagramme oder Komponenten suchen..." autocomplete="off">
+          <span class="search-kbd">⌘K</span>
+        </div>
+      </div>
+
+      <div class="sidebar-section-title">ÜBERSICHT &amp; STRUKTUR</div>
+      <ul class="nav-list" id="navListStructure">
+        <li class="nav-item active" data-index="0">
+          <span class="nav-icon">📌</span>
+          <span class="nav-text">Systemübersicht &amp; Architektur</span>
+          <span class="nav-shortcut">1</span>
+        </li>
+        <li class="nav-item" data-index="1">
+          <span class="nav-icon">🏛️</span>
+          <span class="nav-text">UML Klassendiagramm</span>
+          <span class="nav-shortcut">2</span>
+        </li>
+      </ul>
+
+      <div class="sidebar-section-title">SYSTEM-SEQUENZEN (PIPELINES)</div>
+      <ul class="nav-list" id="navListSequences">
+        <li class="nav-item" data-index="2">
+          <span class="nav-icon">🎙️</span>
+          <span class="nav-text">Sequenz 1: Push-to-Talk &amp; Audio</span>
+          <span class="nav-shortcut">3</span>
+        </li>
+        <li class="nav-item" data-index="3">
+          <span class="nav-icon">📸</span>
+          <span class="nav-text">Sequenz 2: Screen-Capture &amp; STT</span>
+          <span class="nav-shortcut">4</span>
+        </li>
+        <li class="nav-item" data-index="4">
+          <span class="nav-icon">🧠</span>
+          <span class="nav-text">Sequenz 3: Vision-LLM &amp; TTS-Stream</span>
+          <span class="nav-shortcut">5</span>
+        </li>
+        <li class="nav-item" data-index="5">
+          <span class="nav-icon">🎯</span>
+          <span class="nav-text">Sequenz 4: Pointing &amp; Bezier-Flug</span>
+          <span class="nav-shortcut">6</span>
+        </li>
+        <li class="nav-item" data-index="6">
+          <span class="nav-icon">⚡</span>
+          <span class="nav-text">Sequenz 5: Barge-In &amp; Fehler</span>
+          <span class="nav-shortcut">7</span>
+        </li>
+      </ul>
+
+      <div class="sidebar-footer">
+        <div class="tech-metric-row">
+          <span>Refaktoriertes Projekt:</span>
+          <span>10.650 Zeilen Swift</span>
+        </div>
+        <div class="tech-metric-row">
+          <span>Architektur-Muster:</span>
+          <span>MVVM &amp; State Machine</span>
+        </div>
+        <div class="tech-metric-row">
+          <span>In-Memory Test Mocks:</span>
+          <span>100% Hardware-unabhängig</span>
+        </div>
+        <div class="tech-metric-row">
+          <span>Zero Cloud Dependencies:</span>
+          <span>Ollama + Whisper + MLX</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Viewport Stage -->
+    <main class="main-stage">
+
+      <!-- Stage Header & Actions -->
+      <div class="stage-header">
+        <div class="stage-title-wrap">
+          <div class="stage-title-row">
+            <h2 id="currentDiagramTitle" class="stage-title">📌 Systemübersicht &amp; Architektur</h2>
+            <span id="currentDiagramBadge" class="badge badge-blue">High-Level Flowchart</span>
+          </div>
+          <p id="currentDiagramDesc" class="stage-desc">Gesamtarchitektur von Eingabe-Erfassung bis Overlay-Präsentation</p>
+        </div>
+
+        <div class="toolbar-actions">
+          <button class="btn-tool" id="btnZoomOut" title="Zoom Out (Taste -)">
+            <svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg>
+            <span>Verkleinern</span>
+          </button>
+          
+          <button class="btn-tool" id="btnZoomIn" title="Zoom In (Taste +)">
+            <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            <span>Vergrößern</span>
+          </button>
+
+          <button class="btn-tool" id="btnResetZoom" title="Zoom zurücksetzen (Taste 0)">
+            <svg viewBox="0 0 24 24"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
+            <span>100%</span>
+          </button>
+
+          <button class="btn-tool" id="btnFitView" title="Optimal einpassen (Taste F)">
+            <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+            <span>Einpassen</span>
+          </button>
+
+          <div class="tool-separator"></div>
+
+          <button class="btn-tool" id="btnToggleCode" title="Mermaid Quellcode ein-/ausblenden (Taste C)">
+            <svg viewBox="0 0 24 24"><path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/></svg>
+            <span>Code</span>
+          </button>
+
+          <button class="btn-tool" id="btnCopyCode" title="Mermaid Definition kopieren">
+            <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+            <span>Kopieren</span>
+          </button>
+
+          <button class="btn-tool" id="btnExportSvg" title="Diagramm als SVG-Datei herunterladen">
+            <svg viewBox="0 0 24 24"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+            <span>SVG</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Diagram Viewport with Pan & Zoom Canvas -->
+      <div class="viewport-outer">
+        <div class="viewport" id="viewport">
+          <div class="diagram-canvas" id="diagramCanvas">
+            <!-- Rendered SVG will be placed here -->
+          </div>
+        </div>
+
+        <!-- Floating HUD Scale Controls -->
+        <div class="canvas-hud">
+          <button class="hud-btn" id="hudZoomOut" title="Zoom Out">−</button>
+          <span class="hud-scale-label" id="hudScaleLabel">100%</span>
+          <button class="hud-btn" id="hudZoomIn" title="Zoom In">+</button>
+          <div class="tool-separator"></div>
+          <button class="hud-btn" id="hudFit" title="Fit to Screen">⛶</button>
+          <button class="hud-btn" id="hudReset" title="Reset View">↺</button>
+        </div>
+      </div>
+
+      <!-- Collapsible Raw Mermaid Source Code Drawer -->
+      <div class="code-drawer" id="codeDrawer">
+        <div class="code-drawer-header">
+          <span>Mermaid.js Quelltext (vollständig editierbar / kopierbar)</span>
+          <button class="btn-tool" id="btnCopyCodeDrawer">
+            <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+            <span>Code kopieren</span>
+          </button>
+        </div>
+        <pre class="code-pre" id="codePre"></pre>
+      </div>
+
+      <!-- Architecture Notes Card -->
+      <div class="architecture-notes-card" id="notesCard">
+        <div class="note-column" id="notesColLeft">
+          <!-- Dynamically populated -->
+        </div>
+        <div class="note-column" id="notesColRight">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Loading Screen -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="spinner"></div>
+    <div style="font-size: 14px; font-weight: 500; color: var(--text-muted)">Initialisiere Mermaid.js &amp; Vektordiagramme...</div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div class="toast-container" id="toast">
+    <svg style="width: 16px; height: 16px; fill: #10b981;" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+    <span id="toastMsg">In die Zwischenablage kopiert!</span>
+  </div>
+
+  <script>
+    // --- DIAGRAM DEFINITIONS (Complete Mermaid Source & Architecture Insights) ---
+    const DIAGRAMS = [
+      {
+        id: "diag-overview",
+        icon: "📌",
+        title: "Systemübersicht & Gesamtarchitektur",
+        badge: "High-Level Flowchart",
+        desc: "Die 4 Schichten von Clicky: Eingabe-Hardware, Orchestrierung, lokale KI und Presentation.",
+        notesLeft: {
+          title: "Architektonische Schichten",
+          items: [
+            "<strong>1. Input Layer:</strong> <span class='code-tag'>GlobalPushToTalkShortcutMonitor</span> (CGEvent Tap), <span class='code-tag'>AudioEngineCaptureService</span> (AVAudioEngine 16kHz PCM), <span class='code-tag'>CompanionScreenCaptureUtility</span> (ScreenCaptureKit).",
+            "<strong>2. Coordination Layer:</strong> <span class='code-tag'>CompanionCoordinator</span> verwaltet die explizite State Machine (.idle, .listening, .processing, .responding).",
+            "<strong>3. Intelligence Layer:</strong> 100% on-device KI via Whisper C++ (large-v3-turbo), Ollama Vision LLMs (NDJSON Streaming) und MLX Audio Qwen3-TTS.",
+            "<strong>4. Presentation Layer:</strong> Menüleisten-Panel (<span class='code-tag'>NSPanel</span>) und transparenter Multi-Display Cursor Overlay (<span class='code-tag'>OverlayWindowManager</span>)."
+          ]
+        },
+        notesRight: {
+          title: "Schlüsselmerkmale & Entwurfsentscheidungen",
+          items: [
+            "<strong>Kein Dock-Icon:</strong> Konfiguriert mit <span class='code-tag'>LSUIElement=true</span>. Die App lebt ausschließlich in der Menüleiste.",
+            "<strong>Barge-In fähig:</strong> Drücken des Hotkeys bricht sofort aktive KI-Streams, Sprachausgabe und Flugbahnen ab.",
+            "<strong>Dependency Injection:</strong> Vollständige Entkopplung über Protokolle für alle Subsysteme (Audio, Screen, TTS, STT, Vision, Settings, Permissions).",
+            "<strong>Strikte @MainActor Isolation:</strong> Verhindert Concurrency-Data-Races zwischen Audio-Threads und SwiftUI-Views."
+          ]
+        },
+        code: `flowchart TD
+    subgraph Input_Layer["1. Eingabe & Hardware-Erfassung"]
+        Shortcut["GlobalPushToTalkShortcutMonitor<br/>(CGEvent Tap: ctrl+option)"]
+        Mic["AudioEngineCaptureService<br/>(AVAudioEngine Input Tap)"]
+        Screen["CompanionScreenCaptureUtility<br/>(ScreenCaptureKit JPEG + Vision OCR)"]
+    end
+
+    subgraph Coordination_Layer["2. Orchestrierung & State Machine"]
+        Coord["CompanionCoordinator<br/>(State: idle ➔ listening ➔ processing ➔ responding)"]
+        Dictation["BuddyDictationManager<br/>(Audio-Pufferung, Metering, STT-Delegation)"]
+    end
+
+    subgraph Intelligence_Layer["3. Lokale KI-Infrastruktur"]
+        STT["WhisperCPPTranscriptionProvider<br/>(Local large-v3-turbo)"]
+        VLM["OllamaAPI<br/>(Local Vision LLM: llama3.2-vision, qwen2.5-vl)"]
+        TTS["MLXAudioQwenTTSClient<br/>(Local Qwen3-TTS via mlx_audio.server)"]
+        Segmenter["SpeechSentenceSegmenter<br/>(Streaming-Pufferung & Filter)"]
+    end
+
+    subgraph Presentation_Layer["4. Benutzeroberfläche & Overlay"]
+        Panel["CompanionPanelView<br/>(Status, Permissions, Model- & Voice-Picker)"]
+        Overlay["OverlayWindowManager<br/>(Multi-Screen transparente Panels)"]
+        Cursor["BlueCursorView<br/>(Waveform, Spinner, Bezier-Flugbahn, Blase)"]
+    end
+
+    Shortcut -->|Events| Coord
+    Coord -->|Start/Stop| Dictation
+    Mic -->|PCM16 Chunks| Dictation
+    Dictation -->|WAV / Puffer| STT
+    STT -->|Transkript| Coord
+    Coord -->|Screenshot + Prompt| VLM
+    Screen -->|Display-JPEGs| Coord
+    VLM -->|NDJSON Token Stream| Segmenter
+    Segmenter -->|Fertige Sätze| TTS
+    Segmenter -->|Parsed POINT Tag| Coord
+    Coord -->|Target Coordinates| Cursor
+    Overlay --> Cursor
+    Coord -.->|State & Audio Level| Panel`
+      },
+      {
+        id: "diag-class",
+        icon: "🏛️",
+        title: "UML Klassendiagramm: Core, Services & UI",
+        badge: "Object Model & Interfaces",
+        desc: "Klassenbeziehungen, Kernprotokolle zur Dependency Injection und Entkopplung.",
+        notesLeft: {
+          title: "Kern-Schnittstellen (Core Protocols)",
+          items: [
+            "<span class='code-tag'>PermissionsManaging</span>: Verwaltet TCC-Rechte (Accessibility, Screen Recording, Microphone) via Polling und Cache.",
+            "<span class='code-tag'>SettingsStoring</span>: Abstrahiert UserPreferences für zustandslose Unit-Tests ohne schmutzige UserDefaults.",
+            "<span class='code-tag'>TextToSpeechProvider</span>: Vereinheitlicht Qwen3-TTS, Kokoro-82M und AppleTTS Fallbacks.",
+            "<span class='code-tag'>BuddyTranscriptionProvider</span>: Ermöglicht nahtloses Wechseln zwischen Whisper C++, Apple Speech und Cloud-STT."
+          ]
+        },
+        notesRight: {
+          title: "Service- & Coordinator-Hierarchie",
+          items: [
+            "<span class='code-tag'>CompanionCoordinator</span> aggregiert die Services und hält die @Published UI-States.",
+            "<span class='code-tag'>BuddyDictationManager</span> delegiert Hardware-Capture an <span class='code-tag'>AudioEngineCaptureService</span> und Lautstärke an <span class='code-tag'>AudioPowerMeter</span>.",
+            "<span class='code-tag'>SpeechSentenceSegmenter</span> teilt LLM-Tokens in Echtzeit in vollständige Sätze unter Beibehaltung deutscher Abkürzungen (z.B. 'z.B.', 'bzw.').",
+            "<span class='code-tag'>CursorFlightAnimator</span> berechnet kubische Bezier-Kurven und Tangenten für physikalisch weiche Flugbahnen."
+          ]
+        },
+        code: `classDiagram
+    class PermissionsManaging {
+        <<interface>>
+        +allPermissionsGranted: Bool
+        +hasAccessibilityPermission: Bool
+        +hasScreenRecordingPermission: Bool
+        +hasMicrophonePermission: Bool
+        +hasScreenContentPermission: Bool
+        +refreshPermissions()
+        +startPolling(onChange)
+        +stopPolling()
+        +markScreenContentPermissionGranted()
+    }
+
+    class SettingsStoring {
+        <<interface>>
+        +string(forKey) String
+        +set(value, forKey)
+        +double(forKey) Double
+        +set(value, forKey)
+        +bool(forKey) Bool
+        +set(value, forKey)
+    }
+
+    class TextToSpeechProvider {
+        <<interface>>
+        +isAvailable: Bool
+        +prepare()
+        +speakSentence(sentence)
+        +stopPlayback()
+        +setVoiceName(name)
+        +setSpeechRateMultiplier(rate)
+    }
+
+    class BuddyTranscriptionProvider {
+        <<interface>>
+        +isAvailable: Bool
+        +prepare()
+        +transcribe(audioData) String
+    }
+
+    class CompanionCoordinator {
+        +voiceState: CompanionVoiceState
+        +detectedElementScreenLocation: CGPoint
+        +detectedElementHighlightSize: CGSize
+        +currentAudioPowerLevel: CGFloat
+        +selectedModel: String
+        +selectedVoice: String
+        +speechRateMultiplier: Double
+        +start()
+        +handleShortcutPress()
+        +handleShortcutRelease()
+        +sendTranscriptToVisionModelWithScreenshot(transcript)
+    }
+
+    class BuddyDictationManager {
+        +currentPowerLevel: CGFloat
+        +startListening()
+        +finishListeningAndTranscribe() String
+        +cancelListening()
+    }
+
+    class AudioEngineCaptureService {
+        +isRecording: Bool
+        +start(onBuffer)
+        +stop()
+    }
+
+    class AudioPowerMeter {
+        <<utility>>
+        +calculatePowerLevel(from) CGFloat
+        +calculateRootMeanSquare(from) Float
+    }
+
+    class SpeechSentenceSegmenter {
+        +appendAccumulatedResponseText(chunk) List
+        +flushRemainingSentences() List
+        +splitCompleteTextIntoSentences(text)$ List
+    }
+
+    class PointingCoordinateParser {
+        <<utility>>
+        +parse(from)$ PointingParseResult
+    }
+
+    class CursorFlightAnimator {
+        <<utility>>
+        +calculateControlPoints(start, end)$ List
+        +evaluateBezier(t, p0, p1, p2, p3)$ CGPoint
+    }
+
+    class OverlayWindowManager {
+        +showOverlay(onScreens, coordinator)
+        +hideOverlay()
+    }
+
+    CompanionCoordinator o-- PermissionsManaging
+    CompanionCoordinator o-- SettingsStoring
+    CompanionCoordinator o-- TextToSpeechProvider
+    CompanionCoordinator o-- BuddyDictationManager
+    CompanionCoordinator o-- OverlayWindowManager
+    BuddyDictationManager o-- BuddyTranscriptionProvider
+    BuddyDictationManager o-- AudioEngineCaptureService
+    BuddyDictationManager ..> AudioPowerMeter
+    CompanionCoordinator ..> SpeechSentenceSegmenter
+    CompanionCoordinator ..> PointingCoordinateParser
+    OverlayWindowManager ..> CursorFlightAnimator`
+      },
+      {
+        id: "diag-seq-1",
+        icon: "🎙️",
+        title: "Sequenz 1: Push-to-Talk & Live-Audioaufnahme",
+        badge: "Sequence: PTT & Metering",
+        desc: "Ablauf beim Drücken des globalen Shortcuts (ctrl+option), Audio-Pufferung und Waveform-Visualisierung.",
+        notesLeft: {
+          title: "Verarbeitungsphasen",
+          items: [
+            "<strong>Shortcut-Detektion:</strong> <span class='code-tag'>GlobalPushToTalkShortcutMonitor</span> fängt Tastendrücke systemweit via listen-only CGEvent Tap ab.",
+            "<strong>Audio Tap Installation:</strong> <span class='code-tag'>AudioEngineCaptureService</span> installiert einen Input-Tap auf <span class='code-tag'>AVAudioEngine.inputNode</span> mit 16.000 Hz Mono PCM.",
+            "<strong>Echtzeit-Metering:</strong> <span class='code-tag'>AudioPowerMeter</span> errechnet RMS (Root Mean Square) und normalisierte Dezibel-Werte (0.0 bis 1.0).",
+            "<strong>UI-Reaktivität:</strong> <span class='code-tag'>BlueCursorView</span> rendert dynamische Amplitudenbalken neben dem Cursor."
+          ]
+        },
+        notesRight: {
+          title: "Latenz & Hardware-Details",
+          items: [
+            "<strong>Latenz:</strong> &lt; 5 ms vom Tastendruck bis zur Audio-Aufnahme.",
+            "<strong>Barge-In Vorbereitung:</strong> Jedes neue Drücken bricht vorherige Synthesen und Fluganimationen synchron ab.",
+            "<strong>Buffer-Management:</strong> Kontinuierliche Chunk-Pufferung in einem ringförmigen Speicher zur Vermeidung von Speicherfragmentierung."
+          ]
+        },
+        code: `sequenceDiagram
+    autonumber
+    actor User as Benutzer
+    participant Tap as GlobalPushToTalkShortcutMonitor
+    participant Coord as CompanionCoordinator
+    participant Dict as BuddyDictationManager
+    participant Audio as AudioEngineCaptureService
+    participant Meter as AudioPowerMeter
+    participant UI as BlueCursorView
+
+    User->>Tap: Drückt ctrl + option (KeyDown)
+    Tap->>Coord: publish(shortcutPressed)
+    Note over Coord: State wechselt: .idle -> .listening
+    Coord->>Coord: bargeInCancelExistingTasks()
+    Coord->>Dict: startListening()
+    Dict->>Audio: start(onBuffer: ...)
+    Audio->>Audio: AVAudioEngine.inputNode.installTap()
+    
+    loop Kontinuierlicher Audio-Buffer (16kHz / PCM16)
+        Audio-->>Dict: AVAudioPCMBuffer
+        Dict->>Meter: calculatePowerLevel(buffer)
+        Meter-->>Dict: normalizedPower (0.0 - 1.0)
+        Dict-->>Coord: currentAudioPowerLevel = normalizedPower
+        Coord-->>UI: @Published currentAudioPowerLevel
+        UI->>UI: Zeichne dynamische Waveform-Amplituden
+    end`
+      },
+      {
+        id: "diag-seq-2",
+        icon: "📸",
+        title: "Sequenz 2: Screen-Capture & Whisper-Transkription",
+        badge: "Sequence: Multi-Screen & STT",
+        desc: "Parallele Ausführung beim Loslassen des Shortcuts: Schnelle Bildschirmerfassung und On-Device STT.",
+        notesLeft: {
+          title: "Parallele Pipeline-Optimierung",
+          items: [
+            "<strong>Multi-Monitor Snapshots:</strong> <span class='code-tag'>CompanionScreenCaptureUtility</span> nutzt ScreenCaptureKit (macOS 14.2+) zur parallelen Erfassung aller aktiven Displays in nativer Retina-Auflösung.",
+            "<strong>JPEG-Kompression:</strong> Optimierte Bildskalierung auf ca. 1.600 Pixel Kantenlänge mit hoher JPEG-Kompression für extrem schnellen VLM-Upload.",
+            "<strong>Whisper C++ Transkription:</strong> Lokales <span class='code-tag'>large-v3-turbo</span> Modell decodiert Audio in Sekundenschnelle auf Apple Silicon NEON/Accelerate-Kernen."
+          ]
+        },
+        notesRight: {
+          title: "Präzision & Multi-Display Support",
+          items: [
+            "<strong>Monitor-Identifikation:</strong> Jeder Screenshot wird mit Display-Index und Metadaten versehen (Primärdisplay, Cursor-Monitor).",
+            "<strong>UI-Feedback:</strong> Während der Verarbeitung zeigt Clicky den animierten Status 'Audio verarbeiten...' / 'Bildschirm erfassen...'.",
+            "<strong>Fallback-Resilienz:</strong> Falls ScreenCaptureKit blockiert ist, greift Clicky auf CGWindowList-Snapshots zurück."
+          ]
+        },
+        code: `sequenceDiagram
+    autonumber
+    actor User as Benutzer
+    participant Tap as GlobalPushToTalkShortcutMonitor
+    participant Coord as CompanionCoordinator
+    participant Screen as CompanionScreenCaptureUtility
+    participant Dict as BuddyDictationManager
+    participant Audio as AudioEngineCaptureService
+    participant STT as WhisperCPPTranscriptionProvider
+
+    User->>Tap: Lässt ctrl + option los (KeyUp)
+    Tap->>Coord: publish(shortcutReleased)
+    Note over Coord: State wechselt: .listening -> .processing
+    Coord->>Coord: setProcessingStepText("Audio verarbeiten...")
+    
+    par Parallele Ausführung
+        Coord->>Screen: captureAllScreensAsJPEG()
+        Screen->>Screen: ScreenCaptureKit: Multi-Monitor Snapshot
+        Screen-->>Coord: precapturedScreensTask: [CompanionScreenCapture]
+    and
+        Coord->>Dict: finishListeningAndTranscribe()
+        Dict->>Audio: stop() & removeTap()
+        Dict->>Dict: konvertiere PCM16 -> WAV Payload
+        Dict->>STT: transcribe(audioData: wavData)
+        STT->>STT: Whisper C++ local inference (large-v3-turbo)
+        STT-->>Dict: "Klick oben rechts auf das Zahnrad"
+        Dict-->>Coord: transcript: String
+    end
+
+    Note over Coord: Transcript & Screenshots bereit
+    Coord->>Coord: sendTranscriptToVisionModelWithScreenshot(transcript)`
+      },
+      {
+        id: "diag-seq-3",
+        icon: "🧠",
+        title: "Sequenz 3: Vision-LLM & Satz-für-Satz TTS",
+        badge: "Sequence: LLM & Speech Stream",
+        desc: "Echtzeit-Streaming des Ollama Vision LLMs, Satzsegmentierung, Tag-Filterung und MLX-TTS.",
+        notesLeft: {
+          title: "Streaming-Architektur",
+          items: [
+            "<strong>NDJSON Token Streaming:</strong> <span class='code-tag'>OllamaAPI</span> streamt generierte Chunks über HTTP chunked transfer (<span class='code-tag'>AsyncThrowingStream</span>).",
+            "<strong>Intelligente Satzsegmentierung:</strong> <span class='code-tag'>SpeechSentenceSegmenter</span> erkennt Satzenden (. ? !) und schützt deutsche Abkürzungen (z. B., bzw., etc.).",
+            "<strong>Tag-Extraktion:</strong> Steuerbefehle wie <span class='code-tag'>[POINT:x,y:label:screenN]</span> werden vor der Sprachsynthese gefiltert und separat analysiert."
+          ]
+        },
+        notesRight: {
+          title: "Audio-Synthese (MLX Audio)",
+          items: [
+            "<strong>Minimal Time-to-First-Audio (TTFA):</strong> Der erste Satz wird bereits gesprochen, während das LLM noch an den Folgesätzen generiert.",
+            "<strong>Qwen3-TTS / Kokoro:</strong> Lokaler Python-Server (<span class='code-tag'>mlx_audio.server</span>) auf Apple Silicon mit sentence-by-sentence Queueing.",
+            "<strong>AppleTTS Fallback:</strong> Wenn der lokale Server noch lädt oder ausfällt, übernimmt nahtlos die native macOS-Stimme."
+          ]
+        },
+        code: `sequenceDiagram
+    autonumber
+    participant Coord as CompanionCoordinator
+    participant Ollama as OllamaAPI
+    participant Segmenter as SpeechSentenceSegmenter
+    participant Parser as PointingCoordinateParser
+    participant TTS as MLXAudioQwenTTSClient
+    participant Server as mlx_audio.server (Qwen3)
+
+    Coord->>Coord: State wechselt: .processing -> .responding
+    Coord->>Ollama: analyzeImageStreaming(prompt, screens, history)
+    
+    loop NDJSON Token Streaming (HTTP Chunked)
+        Ollama-->>Coord: Chunk ("Klicke oben ")
+        Ollama-->>Coord: Chunk ("auf das Zahnrad. [POINT:850,45:zahnrad]")
+        Coord->>Segmenter: appendAccumulatedResponseText(chunk)
+        
+        opt Vollständiger Satz erkannt (z. B. Punkt + Leerzeichen)
+            Segmenter->>Segmenter: filtere [POINT:...]-Tags heraus
+            Segmenter-->>Coord: sauberer Satz: "Klicke oben auf das Zahnrad."
+            Coord->>TTS: enqueueSentenceForSpeech("Klicke oben...")
+            TTS->>Server: POST /v1/audio/speech (voice, rate, text)
+            Server-->>TTS: Audio PCM Stream
+            TTS->>TTS: Starte AVAudioPlayer Playback
+        end
+    end
+
+    Coord->>Segmenter: flushRemainingSentences()
+    Coord->>Parser: parse(from: fullResponseText)
+    Parser-->>Coord: PointingParseResult(x: 850, y: 45, label: "zahnrad", screen: 1)`
+      },
+      {
+        id: "diag-seq-4",
+        icon: "🎯",
+        title: "Sequenz 4: Pointing, OCR & Bezier-Fluganimation",
+        badge: "Sequence: Vision OCR & Physics",
+        desc: "Koordinaten-Umrechnung (0–1000), Pixel-genaues Apple Vision OCR Text-Snapping und Bezier-Flug.",
+        notesLeft: {
+          title: "Mathematische Koordinaten-Transformation",
+          items: [
+            "<strong>0-1000 Normalisierung:</strong> Das Vision-Modell liefert relative Bildkoordinaten von 0 bis 1000.",
+            "<strong>Origin-Anpassung:</strong> Umrechnung von Top-Left (Vision Modell & ScreenCaptureKit) auf AppKit Bottom-Left Display-Koordinaten.",
+            "<strong>Apple Vision OCR Snapping:</strong> <span class='code-tag'>VNRecognizeTextRequest</span> sucht im Umkreis nach dem Label-Text ('Zahnrad') und snappt den Zielpunkt exakt auf das UI-Element."
+          ]
+        },
+        notesRight: {
+          title: "Physikalische Flugbahn-Berechnung",
+          items: [
+            "<strong>Kubische Bezier-Kurve:</strong> <span class='code-tag'>CursorFlightAnimator</span> berechnet Start-, Kontroll- und Zielpunkte mit natürlicher Biegung.",
+            "<strong>Tangenten-Rotation:</strong> Die blaue Pfeilspitze richtet sich in Echtzeit entlang des Geschwindigkeitsvektors aus.",
+            "<strong>Automatischer Rückflug:</strong> Nach 3 Sekunden Inaktivität am Zielort fliegt der Cursor sanft zurück zur realen Mausposition."
+          ]
+        },
+        code: `sequenceDiagram
+    autonumber
+    participant Coord as CompanionCoordinator
+    participant Screen as CompanionScreenCaptureUtility
+    participant Vision as Apple Vision Framework (OCR)
+    participant Animator as CursorFlightAnimator
+    participant UI as BlueCursorView
+
+    Coord->>Screen: snapToScreenText(candidates: ["zahnrad"], image, screenFrame)
+    Screen->>Vision: VNRecognizeTextRequest(image)
+    Vision-->>Screen: BoundingBox für Text "Zahnrad" (in Pixeln)
+    Screen-->>Coord: Exakte Display-Koordinate (CGPoint) & BoundingBox (CGSize)
+    
+    Coord->>Coord: detectedElementScreenLocation = snappedPoint
+    Coord->>Coord: detectedElementHighlightSize = snappedSize
+    
+    Coord-->>UI: @Published detectedElementScreenLocation
+    Note over UI: BuddyNavigationMode = .navigatingToTarget
+    
+    UI->>Animator: calculateControlPoints(startCursor, targetPoint)
+    Animator-->>UI: Bezier Kontrollpunkte (C1, C2)
+    
+    loop CADisplayLink / 60 FPS Animation
+        UI->>Animator: evaluateBezier(t, P0, C1, C2, P3)
+        Animator-->>UI: Aktuelle Position + Tangentenwinkel
+        UI->>UI: Positioniere blauen Cursor + Rotiere Pfeilspitze
+    end
+
+    Note over UI: Angekommen am Ziel (.pointingAtTarget)
+    UI->>UI: Blende OCR-Highlight-Box & Sprechblase ein
+    UI->>UI: Warte 3 Sekunden Inaktivität
+    UI->>UI: Sanfter Rückflug zum realen Mauszeiger
+    Note over Coord: State wechselt zurück zu: .idle`
+      },
+      {
+        id: "diag-seq-5",
+        icon: "⚡",
+        title: "Sequenz 5: Barge-In Unterbrechung & Fehlerbehandlung",
+        badge: "Sequence: Barge-In & Recovery",
+        desc: "Sofortiger Abbruch laufender Aktionen bei neuem Tastendruck und Fehlertoleranz bei Netzwerk-/Dienstausfällen.",
+        notesLeft: {
+          title: "Barge-In Unterbrechung (Szenario A)",
+          items: [
+            "<strong>Sofortiger Abbruch:</strong> Ein erneuter Druck auf <span class='code-tag'>ctrl+option</span> cancelt unverzüglich die asynchrone Task <span class='code-tag'>currentResponseTask</span>.",
+            "<strong>Audio-Stop:</strong> <span class='code-tag'>textToSpeechProvider.stopPlayback()</span> leert die Satz-Warteschlange und stoppt den AVAudioPlayer ohne Verzögerung.",
+            "<strong>Animation-Reset:</strong> Laufende Zeigeanimationen und OCR-Highlights werden sofort ausgeblendet.",
+            "<strong>Zustandswechsel:</strong> Wechselt ohne Zwischenpause direkt in <span class='code-tag'>.listening</span>."
+          ]
+        },
+        notesRight: {
+          title: "Graceful Degradation (Szenario B)",
+          items: [
+            "<strong>Ollama offline / Connection Refused:</strong> Wird durch strukturiertes <span class='code-tag'>do-catch</span> im Coordinator gefangen.",
+            "<strong>Lokale Sprachrückmeldung:</strong> <span class='code-tag'>speakLocalErrorFallback(...)</span> nutzt AppleTTS, um dem Benutzer mitzuteilen, dass der Dienst nicht erreichbar ist.",
+            "<strong>Kein App-Crash:</strong> Die App bleibt vollständig stabil und kehrt kontrolliert in den <span class='code-tag'>.idle</span> Zustand zurück."
+          ]
+        },
+        code: `sequenceDiagram
+    autonumber
+    actor User as Benutzer
+    participant Tap as GlobalPushToTalkShortcutMonitor
+    participant Coord as CompanionCoordinator
+    participant TTS as TextToSpeechProvider
+    participant Task as Active Task / LLM Stream
+    participant UI as BlueCursorView / Overlay
+    participant Fallback as AppleTTS / Error Voice
+
+    alt Szenario A: Barge-In Unterbrechung während Antwort
+        Note over Coord, UI: Clicky spricht & zeigt UI-Element (.responding)
+        User->>Tap: Drückt erneut ctrl + option
+        Tap->>Coord: publish(shortcutPressed)
+        Note over Coord: BARGE-IN ERKANNT!
+        Coord->>Task: currentResponseTask?.cancel()
+        Task-->>Coord: CancellationError (Stream gestoppt)
+        Coord->>TTS: stopPlayback()
+        TTS->>TTS: AVAudioPlayer stoppen & Queue leeren
+        Coord->>Coord: clearDetectedElementLocation()
+        Coord-->>UI: Abbruch der Fluganimation & OCR-Highlight
+        UI->>UI: Sofortige Rückkehr zur Mausposition
+        Coord->>Coord: voiceState = .listening
+        Note over Coord: Neuer Aufnahmezyklus startet ohne Latenz
+    else Szenario B: Verbindungsfehler (Ollama offline / Timeout)
+        Coord->>Task: sendTranscriptToVisionModelWithScreenshot()
+        Task-->>Coord: throw ConnectionRefusedError
+        Note over Coord: catch let error (Ollama nicht erreichbar)
+        Coord->>Coord: ClickyAnalytics.trackResponseError()
+        Coord->>TTS: stopPlayback()
+        Coord->>Fallback: speakLocalErrorFallback("Ollama ist nicht erreichbar...")
+        Fallback->>Fallback: AppleTTS system voice spricht Fehler lokal
+        Coord-->>UI: Fehler-Indikator / Status zurücksetzen
+        Coord->>Coord: voiceState = .idle
+        Note over Coord: System bleibt stabil und bereit für neuen Shortcut
+    end`
+      }
+    ];
+
+    // --- APPLICATION STATE ---
+    let currentDiagramIndex = 0;
+    const renderedDiagrams = {}; // cache rendered SVG strings
+    const diagramScales = {};    // pan/zoom transform states per diagram
+    let isCodeDrawerOpen = false;
+
+    // Pan & Zoom active variables
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let panX = 0;
+    let panY = 0;
+    let scale = 1.0;
+
+    // DOM Elements
+    const viewport = document.getElementById('viewport');
+    const diagramCanvas = document.getElementById('diagramCanvas');
+    const loadingOverlay = document.getElementById('loadingOverlay');
+    const currentTitle = document.getElementById('currentDiagramTitle');
+    const currentBadge = document.getElementById('currentDiagramBadge');
+    const currentDesc = document.getElementById('currentDiagramDesc');
+    const codeDrawer = document.getElementById('codeDrawer');
+    const codePre = document.getElementById('codePre');
+    const btnToggleCode = document.getElementById('btnToggleCode');
+    const notesColLeft = document.getElementById('notesColLeft');
+    const notesColRight = document.getElementById('notesColRight');
+    const hudScaleLabel = document.getElementById('hudScaleLabel');
+    const toast = document.getElementById('toast');
+    const toastMsg = document.getElementById('toastMsg');
+    const searchInput = document.getElementById('searchInput');
+
+    // --- INITIALIZE MERMAID ---
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'dark',
+      themeVariables: {
+        darkMode: true,
+        background: '#070a12',
+        primaryColor: '#1e293b',
+        primaryTextColor: '#f8fafc',
+        primaryBorderColor: '#3b82f6',
+        lineColor: '#60a5fa',
+        secondaryColor: '#172554',
+        tertiaryColor: '#0f172a',
+        noteBkgColor: '#1e293b',
+        noteTextColor: '#93c5fd',
+        noteBorderColor: '#3b82f6',
+        actorBkg: '#1e293b',
+        actorBorder: '#3b82f6',
+        actorTextColor: '#f8fafc',
+        actorLineColor: '#475569',
+        signalColor: '#60a5fa',
+        signalTextColor: '#f1f5f9',
+        labelBoxBkgColor: '#1e293b',
+        labelBoxBorderColor: '#3b82f6',
+        labelTextColor: '#f1f5f9',
+        loopTextColor: '#93c5fd',
+        altSectionBkgColor: 'rgba(30, 41, 59, 0.45)',
+        activationBkgColor: '#2563eb',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif'
+      },
+      securityLevel: 'loose',
+      flowchart: { useMaxWidth: false, htmlLabels: true, curve: 'basis' },
+      sequence: { useMaxWidth: false, actorMargin: 50, showSequenceNumbers: true },
+      class: { useMaxWidth: false }
+    });
+
+    // --- RENDER DIAGRAMS ---
+    async function preRenderAllDiagrams() {
+      for (let i = 0; i < DIAGRAMS.length; i++) {
+        try {
+          const diag = DIAGRAMS[i];
+          const renderId = 'mermaid-svg-render-' + i;
+          const { svg } = await mermaid.render(renderId, diag.code);
+          renderedDiagrams[i] = svg;
+          diagramScales[i] = { panX: 0, panY: 0, scale: 1.0, isFitted: false };
+        } catch (err) {
+          console.error(`Error rendering diagram ${i}:`, err);
+        }
+      }
+      loadingOverlay.style.opacity = '0';
+      setTimeout(() => {
+        loadingOverlay.style.display = 'none';
+        showDiagram(0);
+      }, 300);
+    }
+
+    // --- SHOW SELECTED DIAGRAM ---
+    function showDiagram(index) {
+      if (index < 0 || index >= DIAGRAMS.length) return;
+      currentDiagramIndex = index;
+      const diag = DIAGRAMS[index];
+
+      // Update Nav active classes
+      document.querySelectorAll('.nav-item').forEach(item => {
+        item.classList.toggle('active', parseInt(item.getAttribute('data-index')) === index);
+      });
+
+      // Update Header Text
+      currentTitle.innerHTML = `${diag.icon} ${diag.title}`;
+      currentBadge.textContent = diag.badge;
+      currentDesc.textContent = diag.desc;
+
+      // Update Notes Section
+      notesColLeft.innerHTML = `
+        <h4>${diag.notesLeft.title}</h4>
+        <ul>${diag.notesLeft.items.map(it => `<li>${it}</li>`).join('')}</ul>
+      `;
+      notesColRight.innerHTML = `
+        <h4>${diag.notesRight.title}</h4>
+        <ul>${diag.notesRight.items.map(it => `<li>${it}</li>`).join('')}</ul>
+      `;
+
+      // Update Code Drawer
+      codePre.textContent = diag.code;
+
+      // Inject Cached SVG
+      diagramCanvas.innerHTML = renderedDiagrams[index] || '<div style="color:red">Rendering failed</div>';
+
+      // Restore or auto-fit transform
+      const state = diagramScales[index];
+      if (!state.isFitted) {
+        fitToScreen();
+        state.isFitted = true;
+      } else {
+        panX = state.panX;
+        panY = state.panY;
+        scale = state.scale;
+        updateTransform();
+      }
+    }
+
+    // --- TRANSFORM, PAN & ZOOM CONTROLLER ---
+    function updateTransform() {
+      diagramCanvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+      hudScaleLabel.textContent = `${Math.round(scale * 100)}%`;
+      // save state
+      if (diagramScales[currentDiagramIndex]) {
+        diagramScales[currentDiagramIndex].panX = panX;
+        diagramScales[currentDiagramIndex].panY = panY;
+        diagramScales[currentDiagramIndex].scale = scale;
+      }
+    }
+
+    function zoomBy(factor, centerX, centerY) {
+      const oldScale = scale;
+      const newScale = Math.min(Math.max(oldScale * factor, 0.15), 5.0);
+      if (newScale === oldScale) return;
+
+      const rect = viewport.getBoundingClientRect();
+      const cx = (centerX !== undefined) ? centerX - rect.left : rect.width / 2;
+      const cy = (centerY !== undefined) ? centerY - rect.top : rect.height / 2;
+
+      panX = cx - (cx - panX) * (newScale / oldScale);
+      panY = cy - (cy - panY) * (newScale / oldScale);
+      scale = newScale;
+      updateTransform();
+    }
+
+    function resetZoom() {
+      scale = 1.0;
+      panX = 0;
+      panY = 0;
+      updateTransform();
+    }
+
+    function fitToScreen() {
+      const svg = diagramCanvas.querySelector('svg');
+      if (!svg) return;
+
+      const vWidth = viewport.clientWidth;
+      const vHeight = viewport.clientHeight;
+
+      let svgWidth = 0;
+      let svgHeight = 0;
+
+      // Get natural dimensions
+      if (svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width > 0) {
+        svgWidth = svg.viewBox.baseVal.width;
+        svgHeight = svg.viewBox.baseVal.height;
+      } else {
+        const b = svg.getBBox();
+        svgWidth = b.width || svg.clientWidth || 800;
+        svgHeight = b.height || svg.clientHeight || 600;
+      }
+
+      const padding = 80;
+      const availW = Math.max(vWidth - padding, 200);
+      const availH = Math.max(vHeight - padding, 200);
+
+      const scaleX = availW / svgWidth;
+      const scaleY = availH / svgHeight;
+      const targetScale = Math.min(Math.min(scaleX, scaleY), 1.25);
+
+      scale = Math.max(targetScale, 0.2);
+      panX = (vWidth - svgWidth * scale) / 2;
+      panY = (vHeight - svgHeight * scale) / 2;
+      updateTransform();
+    }
+
+    // --- EVENT LISTENERS: PAN & ZOOM ---
+    viewport.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return; // left click only
+      isDragging = true;
+      dragStartX = e.clientX - panX;
+      dragStartY = e.clientY - panY;
+      viewport.classList.add('grabbing');
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      panX = e.clientX - dragStartX;
+      panY = e.clientY - dragStartY;
+      updateTransform();
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isDragging) {
+        isDragging = false;
+        viewport.classList.remove('grabbing');
+      }
+    });
+
+    viewport.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.15 : 0.87;
+      zoomBy(factor, e.clientX, e.clientY);
+    }, { passive: false });
+
+    // Toolbar buttons
+    document.getElementById('btnZoomIn').addEventListener('click', () => zoomBy(1.25));
+    document.getElementById('btnZoomOut').addEventListener('click', () => zoomBy(0.8));
+    document.getElementById('btnResetZoom').addEventListener('click', resetZoom);
+    document.getElementById('btnFitView').addEventListener('click', fitToScreen);
+
+    // HUD buttons
+    document.getElementById('hudZoomIn').addEventListener('click', () => zoomBy(1.25));
+    document.getElementById('hudZoomOut').addEventListener('click', () => zoomBy(0.8));
+    document.getElementById('hudReset').addEventListener('click', resetZoom);
+    document.getElementById('hudFit').addEventListener('click', fitToScreen);
+
+    // Code Drawer Toggle
+    function toggleCodeDrawer() {
+      isCodeDrawerOpen = !isCodeDrawerOpen;
+      codeDrawer.classList.toggle('open', isCodeDrawerOpen);
+      btnToggleCode.classList.toggle('active', isCodeDrawerOpen);
+    }
+    btnToggleCode.addEventListener('click', toggleCodeDrawer);
+
+    // Copy to Clipboard
+    function copyCurrentCode() {
+      const code = DIAGRAMS[currentDiagramIndex].code;
+      navigator.clipboard.writeText(code).then(() => {
+        showToast("Mermaid-Quellcode in Zwischenablage kopiert!");
+      }).catch(err => {
+        console.error("Clipboard error:", err);
+      });
+    }
+    document.getElementById('btnCopyCode').addEventListener('click', copyCurrentCode);
+    document.getElementById('btnCopyCodeDrawer').addEventListener('click', copyCurrentCode);
+
+    // Export SVG
+    document.getElementById('btnExportSvg').addEventListener('click', () => {
+      const svg = diagramCanvas.querySelector('svg');
+      if (!svg) return;
+      const svgData = new XMLSerializer().serializeToString(svg);
+      const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `clicky-architecture-${DIAGRAMS[currentDiagramIndex].id}.svg`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast("SVG-Datei erfolgreich exportiert!");
+    });
+
+    // Toast feedback
+    function showToast(msg) {
+      toastMsg.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(() => {
+        toast.classList.remove('show');
+      }, 2400);
+    }
+
+    // Tab Navigation Clicks
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const index = parseInt(item.getAttribute('data-index'));
+        showDiagram(index);
+      });
+    });
+
+    // Search Filtering
+    searchInput.addEventListener('input', (e) => {
+      const query = e.target.value.toLowerCase().trim();
+      document.querySelectorAll('.nav-item').forEach(item => {
+        const index = parseInt(item.getAttribute('data-index'));
+        const diag = DIAGRAMS[index];
+        const match = !query || 
+          diag.title.toLowerCase().includes(query) ||
+          diag.desc.toLowerCase().includes(query) ||
+          diag.code.toLowerCase().includes(query);
+        item.style.display = match ? 'flex' : 'none';
+      });
+    });
+
+    // Keyboard Shortcuts
+    window.addEventListener('keydown', (e) => {
+      // Ignore if user is typing in search
+      if (document.activeElement === searchInput) {
+        if (e.key === 'Escape') searchInput.blur();
+        return;
+      }
+
+      if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        searchInput.focus();
+        return;
+      }
+
+      if (e.key >= '1' && e.key <= '7') {
+        const index = parseInt(e.key) - 1;
+        showDiagram(index);
+      } else if (e.key === '+' || e.key === '=') {
+        zoomBy(1.25);
+      } else if (e.key === '-' || e.key === '_') {
+        zoomBy(0.8);
+      } else if (e.key === '0') {
+        resetZoom();
+      } else if (e.key.toLowerCase() === 'f') {
+        fitToScreen();
+      } else if (e.key.toLowerCase() === 'c' && !e.metaKey && !e.ctrlKey) {
+        toggleCodeDrawer();
+      }
+    });
+
+    // Window Resize -> Re-fit or keep centered
+    window.addEventListener('resize', () => {
+      fitToScreen();
+    });
+
+    // Boot
+    preRenderAllDiagrams();
+  </script>
+</body>
+</html>
